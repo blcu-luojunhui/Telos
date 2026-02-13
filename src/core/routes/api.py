@@ -1,9 +1,6 @@
-import asyncio
+from quart import Blueprint, request, jsonify
 
-from quart import Blueprint, request, jsonify, current_app
-
-from src.auth import jwt_required, ws_jwt_auth
-from src.utils import create_token
+from src.infra.shared import create_token
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 

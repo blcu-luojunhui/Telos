@@ -1,7 +1,6 @@
 from quart import Quart
 from src.config import Config
-from src.routes import register_routes
-from src.database import init_db, close_db
+from src.core.routes import register_routes
 
 
 def create_app():

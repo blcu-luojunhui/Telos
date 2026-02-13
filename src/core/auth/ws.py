@@ -1,7 +1,7 @@
 import jwt
 
 from quart import websocket
-from src.utils.jwt import decode_token
+from src.infra.shared.jwt import decode_token
 
 
 async def ws_jwt_auth():

@@ -3,7 +3,7 @@ import jwt
 from functools import wraps
 from quart import request, jsonify
 
-from src.utils.jwt import decode_token
+from src.infra.shared.jwt import decode_token
 
 
 def jwt_required(fn):
