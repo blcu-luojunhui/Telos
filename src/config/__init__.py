@@ -15,7 +15,7 @@ class Config(BaseSettings):
     debug: bool = Field(default=False, description="调试模式")
 
     # ============ 数据库配置 ============
-    mysql_config: BetterMeMySQLConfig = Field(default_factory=BetterMeMySQLConfig)
+    better_me: BetterMeMySQLConfig = Field(default_factory=BetterMeMySQLConfig)
 
     #
     model_config = SettingsConfigDict(

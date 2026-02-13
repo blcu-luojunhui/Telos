@@ -32,6 +32,7 @@ class MySQLConfig(BaseSettings):
 
 
 class BetterMeMySQLConfig(MySQLConfig):
+    db_name = "better_me"
     host: str = "localhost"
     user: str = "root"
     password: str = "xxxxxxxx"
@@ -43,3 +44,10 @@ class BetterMeMySQLConfig(MySQLConfig):
         case_sensitive=False,
         extra="ignore",
     )
+
+    def async_sqlalchemy_url(self) -> str:
+        """SQLAlchemy 异步 DSN（aiomysql 驱动），供 base.py 与 models 使用。"""
+        from urllib.parse import quote_plus
+
+        pw = quote_plus(self.password)
+        return f"mysql+aiomysql://{self.user}:{pw}@{self.host}:{self.port}/{self.db}?charset={self.charset}"
