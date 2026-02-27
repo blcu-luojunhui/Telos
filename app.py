@@ -1,6 +1,7 @@
 from quart import Quart
 from src.config import Config
 from src.core.routes import register_routes
+from src.core.database.mysql import init_mysql, close_mysql, create_tables
 
 
 def create_app():
@@ -10,15 +11,15 @@ def create_app():
     # 注册路由
     register_routes(app)
 
-    # 服务启动前（初始化数据库 / 连接池）
-    # @app.before_serving
-    # async def startup():
-    #     init_db(app)
+    # 服务启动时初始化 MySQL（交互层落表依赖）
+    @app.before_serving
+    async def startup():
+        init_mysql(app)
+        await create_tables()
 
-    # # 服务关闭后（释放资源）
-    # @app.after_serving
-    # async def shutdown():
-    #     await close_db()
+    @app.after_serving
+    async def shutdown():
+        await close_mysql()
 
     return app
 

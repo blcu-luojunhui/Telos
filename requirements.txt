@@ -1,0 +1,5 @@
+# 交互层 NLU（自然语言解析）
+openai>=1.0.0
+
+# SQLAlchemy 异步 run_sync 依赖
+greenlet>=3.0.0

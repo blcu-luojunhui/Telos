@@ -1,7 +1,9 @@
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .mysql import BetterMeMySQLConfig
+from src.config.api import OpenAIConfig
+from src.config.api import DeepSeekConfig
+from src.config.database import BetterMeMySQLConfig
 
 
 class Config(BaseSettings):
@@ -16,6 +18,10 @@ class Config(BaseSettings):
 
     # ============ 数据库配置 ============
     better_me: BetterMeMySQLConfig = Field(default_factory=BetterMeMySQLConfig)
+
+    # ============ LLM / OpenAI（交互层 NLU 等） ============
+    openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
+    deepseek: DeepSeekConfig = Field(default_factory=DeepSeekConfig)
 
     #
     model_config = SettingsConfigDict(

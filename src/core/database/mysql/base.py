@@ -31,7 +31,7 @@ def init_mysql(app=None, *, dsn: Optional[str] = None):
         url = dsn
     if not url:
         from src.config import Config
-        cfg = Config().mysql_config
+        cfg = Config().better_me
         url = cfg.async_sqlalchemy_url()
         pool_size = getattr(cfg, "minsize", 5)
         max_overflow = max(0, getattr(cfg, "maxsize", 20) - pool_size)
@@ -45,6 +45,18 @@ def init_mysql(app=None, *, dsn: Optional[str] = None):
         echo=bool(app and app.config.get("DEBUG")),
     )
     SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+
+async def create_tables():
+    """
+    根据 ORM 模型创建所有表（若不存在）。
+    需在 init_mysql() 之后调用；会确保 models 已导入（通过 mysql/__init__.py）。
+    """
+    global engine
+    if engine is None:
+        return
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
 
 async def close_mysql():
