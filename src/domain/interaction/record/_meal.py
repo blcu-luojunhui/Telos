@@ -8,8 +8,11 @@ from src.core.database.mysql import Meal
 from .utils import _get
 
 
-async def insert_meal(session: AsyncSession, d: date, payload: dict) -> Meal:
+async def insert_meal(
+    session: AsyncSession, user_id: str, d: date, payload: dict
+) -> Meal:
     m = Meal(
+        user_id=user_id,
         date=d,
         meal_type=_get(payload, "meal_type") or "snack",
         food_items=_get(payload, "food_items") or "",

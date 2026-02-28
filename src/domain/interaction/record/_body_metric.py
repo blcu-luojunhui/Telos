@@ -7,9 +7,10 @@ from .utils import _get
 
 
 async def insert_body_metric(
-    session: AsyncSession, d: date, payload: dict
+    session: AsyncSession, user_id: str, d: date, payload: dict
 ) -> BodyMetric:
     b = BodyMetric(
+        user_id=user_id,
         date=d,
         weight=_get(payload, "weight"),
         body_fat=_get(payload, "body_fat"),
@@ -26,11 +27,12 @@ async def insert_body_metric(
 
 
 async def insert_status(
-    session: AsyncSession, d: date, payload: dict, raw: str
+    session: AsyncSession, user_id: str, d: date, payload: dict, raw: str
 ) -> BodyMetric:
     """今日状态写入 body_metrics：用 note 存描述，可选 mood/精力/压力。"""
     note = _get(payload, "note") or raw
     b = BodyMetric(
+        user_id=user_id,
         date=d,
         note=note,
         # 若后续 body_metrics 表加 mood/energy/stress 字段可在这里填

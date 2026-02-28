@@ -14,10 +14,5 @@ __all__ = [
     "RecordStatusPayload",
     "RecordMealPayload",
     "RecordBodyMetricPayload",
-    "SetGoalPayload"
+    "SetGoalPayload",
 ]
-
-
-
-
-

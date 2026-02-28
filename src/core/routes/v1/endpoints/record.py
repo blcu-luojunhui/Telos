@@ -23,6 +23,11 @@ def create_record_bp() -> Blueprint:
         }
         """
         data = await request.get_json() or {}
+
+        user_id = (data.get("user_id") or "").strip()
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
+
         intent_str = (data.get("intent") or "").strip().lower()
         if not intent_str:
             return jsonify({"error": "intent is required"}), 400
@@ -40,6 +45,7 @@ def create_record_bp() -> Blueprint:
                 pass
 
         parsed = ParsedRecord(
+            user_id=user_id,
             intent=intent,
             date=ref_date,
             payload=data.get("payload") or {},

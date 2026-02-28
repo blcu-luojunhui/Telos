@@ -31,11 +31,12 @@ async def apply_parsed_record(parsed: ParsedRecord) -> dict[str, Any]:
 
     payload = parsed.payload or {}
     d = parsed.date or date.today()
+    uid = parsed.user_id
 
     async with async_mysql_pool.session() as session:
         try:
             if parsed.intent == IntentType.RECORD_WORKOUT:
-                row = await insert_workout(session, d, payload)
+                row = await insert_workout(session, uid, d, payload)
                 await session.commit()
                 return {
                     "ok": True,
@@ -45,7 +46,7 @@ async def apply_parsed_record(parsed: ParsedRecord) -> dict[str, Any]:
                 }
 
             if parsed.intent == IntentType.RECORD_MEAL:
-                row = await insert_meal(session, d, payload)
+                row = await insert_meal(session, uid, d, payload)
                 await session.commit()
                 return {
                     "ok": True,
@@ -55,7 +56,7 @@ async def apply_parsed_record(parsed: ParsedRecord) -> dict[str, Any]:
                 }
 
             if parsed.intent == IntentType.RECORD_BODY_METRIC:
-                row = await insert_body_metric(session, d, payload)
+                row = await insert_body_metric(session, uid, d, payload)
                 await session.commit()
                 return {
                     "ok": True,
@@ -65,7 +66,7 @@ async def apply_parsed_record(parsed: ParsedRecord) -> dict[str, Any]:
                 }
 
             if parsed.intent == IntentType.SET_GOAL:
-                row = await insert_goal(session, payload)
+                row = await insert_goal(session, uid, payload)
                 await session.commit()
                 return {
                     "ok": True,
@@ -75,7 +76,7 @@ async def apply_parsed_record(parsed: ParsedRecord) -> dict[str, Any]:
                 }
 
             if parsed.intent == IntentType.RECORD_STATUS:
-                row = await insert_status(session, d, payload, parsed.raw_message)
+                row = await insert_status(session, uid, d, payload, parsed.raw_message)
                 await session.commit()
                 return {
                     "ok": True,

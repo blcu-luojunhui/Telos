@@ -19,7 +19,7 @@ class PrettyFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         emoji = self.LEVEL_EMOJI.get(record.levelno, "  ")
-        time = self.formatTime(record, "%H:%M:%S")
+        time = self.formatTime(record, "%Y-%m-%d %H:%M:%S")
         msg = record.getMessage()
         return f"  {emoji}  {time}  ›  {msg}"
 

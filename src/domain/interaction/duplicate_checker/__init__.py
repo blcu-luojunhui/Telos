@@ -27,32 +27,38 @@ class DuplicateHit:
 
 
 async def check_duplicate(
+    user_id: str,
     intent: IntentType,
     record_date: date,
     payload: dict[str, Any],
 ) -> Optional[DuplicateHit]:
     """
-    检查当天是否已有"同类"记录。
+    检查该用户当天是否已有"同类"记录。
     如果有，判断内容是否一致，返回 DuplicateHit；没有则返回 None。
     """
     if intent == IntentType.RECORD_MEAL:
-        return await _check_meal(record_date, payload)
+        return await _check_meal(user_id, record_date, payload)
     if intent == IntentType.RECORD_WORKOUT:
-        return await _check_workout(record_date, payload)
+        return await _check_workout(user_id, record_date, payload)
     if intent == IntentType.RECORD_BODY_METRIC:
-        return await _check_body_metric(record_date, payload)
+        return await _check_body_metric(user_id, record_date, payload)
     if intent == IntentType.SET_GOAL:
-        return await _check_goal(payload)
+        return await _check_goal(user_id, payload)
     return None
 
 
-async def _check_meal(d: date, payload: dict) -> Optional[DuplicateHit]:
+async def _check_meal(user_id: str, d: date, payload: dict) -> Optional[DuplicateHit]:
     meal_type = payload.get("meal_type")
     if not meal_type:
         return None
 
     async with async_mysql_pool.session() as session:
-        stmt = select(Meal).where(Meal.date == d, Meal.meal_type == meal_type)
+        stmt = select(Meal).where(
+            Meal.user_id == user_id,
+            Meal.date == d,
+            Meal.meal_type == meal_type,
+            Meal.status == "active",
+        )
         result = await session.execute(stmt)
         existing = result.scalars().first()
         if not existing:
@@ -70,13 +76,20 @@ async def _check_meal(d: date, payload: dict) -> Optional[DuplicateHit]:
         )
 
 
-async def _check_workout(d: date, payload: dict) -> Optional[DuplicateHit]:
+async def _check_workout(
+    user_id: str, d: date, payload: dict
+) -> Optional[DuplicateHit]:
     w_type = payload.get("type")
     if not w_type:
         return None
 
     async with async_mysql_pool.session() as session:
-        stmt = select(Workout).where(Workout.date == d, Workout.type == w_type)
+        stmt = select(Workout).where(
+            Workout.user_id == user_id,
+            Workout.date == d,
+            Workout.type == w_type,
+            Workout.status == "active",
+        )
         result = await session.execute(stmt)
         existing = result.scalars().first()
         if not existing:
@@ -97,9 +110,15 @@ async def _check_workout(d: date, payload: dict) -> Optional[DuplicateHit]:
         )
 
 
-async def _check_body_metric(d: date, payload: dict) -> Optional[DuplicateHit]:
+async def _check_body_metric(
+    user_id: str, d: date, payload: dict
+) -> Optional[DuplicateHit]:
     async with async_mysql_pool.session() as session:
-        stmt = select(BodyMetric).where(BodyMetric.date == d)
+        stmt = select(BodyMetric).where(
+            BodyMetric.user_id == user_id,
+            BodyMetric.date == d,
+            BodyMetric.status == "active",
+        )
         result = await session.execute(stmt)
         existing = result.scalars().first()
         if not existing:
@@ -122,13 +141,14 @@ async def _check_body_metric(d: date, payload: dict) -> Optional[DuplicateHit]:
         )
 
 
-async def _check_goal(payload: dict) -> Optional[DuplicateHit]:
+async def _check_goal(user_id: str, payload: dict) -> Optional[DuplicateHit]:
     g_type = payload.get("type")
     if not g_type:
         return None
 
     async with async_mysql_pool.session() as session:
         stmt = select(Goal).where(
+            Goal.user_id == user_id,
             Goal.type == g_type,
             Goal.status.in_(["planning", "ongoing"]),
         )

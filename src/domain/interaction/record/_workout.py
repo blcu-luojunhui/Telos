@@ -1,4 +1,5 @@
 """ """
+
 from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,8 +8,11 @@ from src.core.database.mysql import Workout
 from .utils import _get
 
 
-async def insert_workout(session: AsyncSession, d: date, payload: dict) -> Workout:
+async def insert_workout(
+    session: AsyncSession, user_id: str, d: date, payload: dict
+) -> Workout:
     w = Workout(
+        user_id=user_id,
         date=d,
         type=_get(payload, "type") or "other",
         duration_min=_get(payload, "duration_min"),

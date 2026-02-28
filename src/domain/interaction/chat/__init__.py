@@ -1,13 +1,14 @@
 """
-Chat 包：带上下文的对话管理 + 重复检测 + 确认流程。
+Chat 包：基于 user_id 的持久化对话管理 + 重复检测 + 确认流程。
 """
+
 from .handler import handle_chat_message
 from .response import ChatResponse
-from .session import ChatSession, get_or_create_session
+from .session import UserSession, get_user_session
 
 __all__ = [
     "handle_chat_message",
     "ChatResponse",
-    "ChatSession",
-    "get_or_create_session",
+    "UserSession",
+    "get_user_session",
 ]

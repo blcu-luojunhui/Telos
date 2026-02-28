@@ -1,6 +1,7 @@
 """
 展示与格式化工具：将解析结果转为人类可读文本。
 """
+
 from __future__ import annotations
 
 from src.domain.interaction.schemas import IntentType, ParsedRecord

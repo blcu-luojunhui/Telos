@@ -8,6 +8,7 @@ from .intent_type import IntentType
 class ParsedRecord(BaseModel):
     """单条用户输入解析结果。"""
 
+    user_id: str = Field(default="", description="用户标识")
     intent: IntentType
     date: Optional[datetime.date] = Field(
         default=None, description="若用户未说日期则用当天"
