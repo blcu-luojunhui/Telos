@@ -1,11 +1,11 @@
 """
 ORM models (mappers) for better_me MySQL data layer.
-Tables: workouts, body_metrics, meals, user_profile, goals.
+Tables: workouts, body_metrics, meals, user_profile, goals, chat_messages.
 
-使用方式：先 init_mysql(app) 或 init_mysql(dsn=...)，再通过 get_db() 或 SessionLocal 取 Session，例如：
-    from src.core.database.mysql import get_db, Workout
+使用方式：先 db.init(app) 或 db.init(dsn=...)，再通过 db.session() 取 Session，例如：
+    from src.core.database.mysql import db, Workout
     from sqlalchemy import select
-    async with SessionLocal() as session:
+    async with db.session() as session:
         result = await session.execute(select(Workout).where(Workout.date >= ...))
 """
 
@@ -30,10 +30,18 @@ class Workout(Base):
     __tablename__ = "workouts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     type: Mapped[str] = mapped_column(
         String(32), nullable=False, index=True
     )  # run / basketball / strength / other
+    status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="active",
+        server_default="active",
+        index=True,
+    )  # active / replaced / deleted
     duration_min: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     distance_km: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     avg_pace: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # min/km
@@ -63,7 +71,15 @@ class BodyMetric(Base):
     __tablename__ = "body_metrics"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="active",
+        server_default="active",
+        index=True,
+    )  # active / replaced / deleted
     weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # kg
     body_fat: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # %
     muscle_mass: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # kg
@@ -89,7 +105,15 @@ class Meal(Base):
     __tablename__ = "meals"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="active",
+        server_default="active",
+        index=True,
+    )  # active / replaced / deleted
     meal_type: Mapped[str] = mapped_column(
         String(32), nullable=False, index=True
     )  # breakfast / lunch / dinner / snack
@@ -119,7 +143,13 @@ class UserProfile(Base):
     __tablename__ = "user_profile"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    height: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # cm
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    height: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="身高（cm）"
+    )
+    weight: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="体重（kg）"
+    )
     gender: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     birth_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     activity_level: Mapped[Optional[str]] = mapped_column(
@@ -145,6 +175,7 @@ class Goal(Base):
     __tablename__ = "goals"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     # weight_loss / muscle_gain / maintenance / race / ...
     target: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
@@ -158,3 +189,26 @@ class Goal(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+
+# ---------------------------------------------------------------------------
+# 对话消息 chat_messages（按 user_id 存储对话上下文）
+# ---------------------------------------------------------------------------
+
+
+class ChatMessage(Base):
+    """对话消息记录：每条用户/助手消息都持久化，用于上下文感知。"""
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(
+        String(16), nullable=False
+    )  # user / assistant / system
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    msg_type: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )  # saved / needs_confirm / confirmed / cancelled / error / unknown / None
+    extra: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

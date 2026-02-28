@@ -1,7 +1,14 @@
+from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .mysql import BetterMeMySQLConfig
+from src.config.api import OpenAIConfig
+from src.config.api import DeepSeekConfig
+from src.config.database import BetterMeMySQLConfig
+
+# NLU 解析可选的 LLM 供应商
+LLMProviderType = Literal["deepseek", "openai"]
 
 
 class Config(BaseSettings):
@@ -16,6 +23,14 @@ class Config(BaseSettings):
 
     # ============ 数据库配置 ============
     better_me: BetterMeMySQLConfig = Field(default_factory=BetterMeMySQLConfig)
+
+    # ============ LLM（交互层 NLU）：供应商 + 各供应商配置 ============
+    llm_provider: LLMProviderType = Field(
+        default="deepseek",
+        description="NLU 使用的 LLM 供应商: deepseek | openai",
+    )
+    openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
+    deepseek: DeepSeekConfig = Field(default_factory=DeepSeekConfig)
 
     #
     model_config = SettingsConfigDict(

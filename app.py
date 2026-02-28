@@ -1,26 +1,42 @@
+"""
+BetterMe 应用入口。
+"""
+
+import logging
+
 from quart import Quart
+
 from src.config import Config
-from src.core.routes import register_routes
+from src.core.database.mysql import async_mysql_pool
+from src.core.routes.v1 import register_routes
+from src.infra.shared import setup_logging
+
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
-def create_app():
-    app = Quart(__name__)
-    app.config.from_object(Config)
+def create_app() -> Quart:
+    _app = Quart(__name__)
+    _app.config.from_object(Config)
 
-    # 注册路由
-    register_routes(app)
+    @_app.before_serving
+    async def startup():
+        logger.info("Initializing async MySQL pool")
+        async_mysql_pool.init(_app)
+        logger.info("Registering routes")
+        register_routes(_app)
+        logger.info("Creating database tables if not exist")
+        await async_mysql_pool.create_tables()
+        logger.info("MySQL ready")
 
-    # 服务启动前（初始化数据库 / 连接池）
-    # @app.before_serving
-    # async def startup():
-    #     init_db(app)
+    @_app.after_serving
+    async def shutdown():
+        logger.info("Closing MySQL connection pool")
+        await async_mysql_pool.close()
+        logger.info("Shutdown complete")
 
-    # # 服务关闭后（释放资源）
-    # @app.after_serving
-    # async def shutdown():
-    #     await close_db()
-
-    return app
+    logger.info("App created")
+    return _app
 
 
 app = create_app()
