@@ -8,13 +8,7 @@ from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.database.mysql import (
-    async_mysql_pool,
-    Workout,
-    Meal,
-    BodyMetric,
-    Goal
-)
+from src.core.database.mysql import async_mysql_pool, Workout, Meal, BodyMetric, Goal
 from src.domain.interaction.schemas import IntentType, ParsedRecord
 
 

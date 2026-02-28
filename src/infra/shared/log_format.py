@@ -1,6 +1,7 @@
 """
 统一日志格式配置：带表情、易读。
 """
+
 import logging
 import sys
 

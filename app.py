@@ -1,6 +1,7 @@
 """
 BetterMe 应用入口。
 """
+
 import logging
 
 from quart import Quart

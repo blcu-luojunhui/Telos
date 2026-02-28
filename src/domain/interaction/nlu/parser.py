@@ -43,7 +43,9 @@ def _get_llm_client_and_model(provider: LLMProviderType):
     try:
         from openai import AsyncOpenAI
     except ImportError:
-        raise RuntimeError("请安装 openai: pip install openai（DeepSeek 也使用该客户端）")
+        raise RuntimeError(
+            "请安装 openai: pip install openai（DeepSeek 也使用该客户端）"
+        )
 
     cfg = Config()
     if provider == "deepseek":

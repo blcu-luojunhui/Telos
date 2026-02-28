@@ -5,7 +5,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class DeepSeekConfig(BaseSettings):
-    api_key: str = Field(default="", description="DeepSeek API Key（环境变量 DEEP_SEEK_API_KEY）")
+    api_key: str = Field(
+        default="", description="DeepSeek API Key（环境变量 DEEP_SEEK_API_KEY）"
+    )
     model: str = Field(default="deepseek-chat", description="模型，如V3, R1")
     base_url: str = Field(
         default="https://api.deepseek.com", description="base_url链接"

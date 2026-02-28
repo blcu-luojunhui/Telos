@@ -6,7 +6,6 @@ from src.domain.interaction import parse_user_message, apply_parsed_record
 
 
 def create_record_bp():
-
     record_bp = Blueprint("record", __name__, url_prefix="/v1/api")
 
     @record_bp.route("/record", methods=["POST"])
@@ -16,6 +15,7 @@ def create_record_bp():
         Body: { "message": "今天中午吃了牛肉面，挺饱的", "date": "2025-02-27" }（date 可选，默认当天）
         """
         import traceback
+
         data = await request.get_json() or {}
         message = (data.get("message") or "").strip()
         print(message)
