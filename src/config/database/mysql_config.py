@@ -34,12 +34,10 @@ class MySQLConfig(BaseSettings):
 
 
 class BetterMeMySQLConfig(MySQLConfig):
-    db_name: ClassVar[str] = "better_me"
     host: str = "localhost"
     user: str = "root"
-    # password: str = "xxxxxxxx"
-    password: str = "ljh000118"
     db: str = "better_me"
+    password: str
 
     model_config = SettingsConfigDict(
         env_prefix="BETTER_ME_DB_",
