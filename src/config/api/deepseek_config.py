@@ -9,6 +9,7 @@ class DeepSeekConfig(BaseSettings):
         default="", description="DeepSeek API Key（环境变量 DEEP_SEEK_API_KEY）"
     )
     model: str = Field(default="deepseek-chat", description="模型，如V3, R1")
+    reason_model: str = Field(default="", description="推理模型")
     base_url: str = Field(
         default="https://api.deepseek.com", description="base_url链接"
     )

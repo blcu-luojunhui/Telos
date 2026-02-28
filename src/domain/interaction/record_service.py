@@ -1,6 +1,6 @@
 """
-根据解析结果写入数据层（workouts / meals / body_metrics / goals）。
-record_status 写入 body_metrics 的 note（或单行仅 date + note）。
+
+
 """
 
 from datetime import date

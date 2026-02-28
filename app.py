@@ -27,15 +27,15 @@ def create_app() -> Quart:
         register_routes(_app)
         logger.info("Creating database tables if not exist")
         await async_mysql_pool.create_tables()
-        logger.info("✅ MySQL ready")
+        logger.info("MySQL ready")
 
     @_app.after_serving
     async def shutdown():
         logger.info("Closing MySQL connection pool")
         await async_mysql_pool.close()
-        logger.info("✅ Shutdown complete")
+        logger.info("Shutdown complete")
 
-    logger.info("🚀 App created")
+    logger.info("App created")
     return _app
 
 
