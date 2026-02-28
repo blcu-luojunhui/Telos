@@ -236,7 +236,10 @@ async def parse_user_message(
         repair_resp = await client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": REPAIR_SYSTEM_PROMPT + "\n\n" + SYSTEM_PROMPT},
+                {
+                    "role": "system",
+                    "content": REPAIR_SYSTEM_PROMPT + "\n\n" + SYSTEM_PROMPT,
+                },
                 {"role": "user", "content": repair_user},
             ],
             temperature=0.0,

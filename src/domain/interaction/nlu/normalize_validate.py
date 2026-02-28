@@ -1,5 +1,5 @@
 """
-Stage 2: 归一化 + Pydantic 校验（Hybrid NLU）。
+归一化 + Pydantic 校验（Hybrid NLU）。
 
 - 将 LLM 输出的 intent/payload 做白名单过滤、类型转换、枚举映射
 - 用 schemas.py 中的 Pydantic 模型校验 payload
@@ -61,7 +61,7 @@ def _to_number(v: Any) -> Any:
         if not s:
             return None
         # 去掉常见单位尾巴
-        for suf in ("%","kg","g","分钟","min","km","公里","小时","h"):
+        for suf in ("%", "kg", "g", "分钟", "min", "km", "公里", "小时", "h"):
             if s.lower().endswith(suf):
                 s = s[: -len(suf)].strip()
                 break
@@ -110,7 +110,9 @@ def _clean_payload(intent: IntentType, payload: Any) -> dict[str, Any]:
     return {k: payload.get(k) for k in allow if k in payload}
 
 
-def normalize_payload(intent: IntentType, payload: Any, hints: dict[str, Any] | None = None) -> dict[str, Any]:
+def normalize_payload(
+    intent: IntentType, payload: Any, hints: dict[str, Any] | None = None
+) -> dict[str, Any]:
     hints = hints or {}
     p = _clean_payload(intent, payload)
 
@@ -137,7 +139,15 @@ def normalize_payload(intent: IntentType, payload: Any, hints: dict[str, Any] | 
             p[k] = _to_number(v)
 
     # 主观 1-10
-    for k in ("subjective_fatigue", "sleep_quality", "mood", "motivation", "stress_level", "satiety", "energy"):
+    for k in (
+        "subjective_fatigue",
+        "sleep_quality",
+        "mood",
+        "motivation",
+        "stress_level",
+        "satiety",
+        "energy",
+    ):
         if k in p:
             p[k] = _clamp_1_10(p.get(k))
 
@@ -145,7 +155,10 @@ def normalize_payload(intent: IntentType, payload: Any, hints: dict[str, Any] | 
     if intent == IntentType.RECORD_WORKOUT:
         raw = p.get("type") or hints.get("workout_type")
         if isinstance(raw, str):
-            p["type"] = _WORKOUT_TYPE_MAP.get(raw.strip().lower(), _WORKOUT_TYPE_MAP.get(raw.strip(), raw.strip().lower()))
+            p["type"] = _WORKOUT_TYPE_MAP.get(
+                raw.strip().lower(),
+                _WORKOUT_TYPE_MAP.get(raw.strip(), raw.strip().lower()),
+            )
         if not p.get("distance_km") and hints.get("distance_km") is not None:
             p["distance_km"] = hints["distance_km"]
         if not p.get("duration_min") and hints.get("duration_min") is not None:
@@ -155,7 +168,10 @@ def normalize_payload(intent: IntentType, payload: Any, hints: dict[str, Any] | 
     if intent == IntentType.RECORD_MEAL:
         raw = p.get("meal_type") or hints.get("meal_type")
         if isinstance(raw, str):
-            p["meal_type"] = _MEAL_TYPE_MAP.get(raw.strip().lower(), _MEAL_TYPE_MAP.get(raw.strip(), raw.strip().lower()))
+            p["meal_type"] = _MEAL_TYPE_MAP.get(
+                raw.strip().lower(),
+                _MEAL_TYPE_MAP.get(raw.strip(), raw.strip().lower()),
+            )
 
     # body metric：若 hints 识别了 斤->kg，且用户语句像在报体重，则可补 weight
     if intent == IntentType.RECORD_BODY_METRIC:
@@ -165,7 +181,9 @@ def normalize_payload(intent: IntentType, payload: Any, hints: dict[str, Any] | 
     return p
 
 
-def validate_payload(intent: IntentType, payload: dict[str, Any]) -> tuple[dict[str, Any], Optional[str]]:
+def validate_payload(
+    intent: IntentType, payload: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[str]]:
     """
     返回 (validated_payload_dict, error_text_or_none)。
     """
@@ -188,7 +206,7 @@ def validate_payload(intent: IntentType, payload: dict[str, Any]) -> tuple[dict[
 
 
 def normalize_intent(raw: Any) -> IntentType:
-    s = (raw or "unknown")
+    s = raw or "unknown"
     if isinstance(s, str):
         s2 = s.strip().lower()
     else:
@@ -199,7 +217,9 @@ def normalize_intent(raw: Any) -> IntentType:
         return IntentType.UNKNOWN
 
 
-def normalize_date(raw: Any, reference_date: date, hints: dict[str, Any] | None = None) -> date:
+def normalize_date(
+    raw: Any, reference_date: date, hints: dict[str, Any] | None = None
+) -> date:
     """
     顶层 date：接受 str/date/None；None 则用 reference_date；hints 里的 explicit_date 优先。
     """
@@ -224,4 +244,3 @@ def normalize_date(raw: Any, reference_date: date, hints: dict[str, Any] | None 
         except Exception:
             return reference_date
     return reference_date
-

@@ -73,18 +73,28 @@ def _hint_meal_type(text: str) -> str | None:
         return "lunch"
     if any(k in text for k in ("晚餐", "晚饭", "晚饭吃", "晚饭了")) or "dinner" in t:
         return "dinner"
-    if any(k in text for k in ("加餐", "零食", "夜宵")) or any(k in t for k in ("snack", "late-night")):
+    if any(k in text for k in ("加餐", "零食", "夜宵")) or any(
+        k in t for k in ("snack", "late-night")
+    ):
         return "snack"
     return None
 
 
 def _hint_workout_type(text: str) -> str | None:
     t = text.lower()
-    if any(k in text for k in ("跑步", "慢跑", "长跑", "夜跑", "晨跑")) or "run" in t or "jog" in t:
+    if (
+        any(k in text for k in ("跑步", "慢跑", "长跑", "夜跑", "晨跑"))
+        or "run" in t
+        or "jog" in t
+    ):
         return "run"
     if "篮球" in text or "basketball" in t:
         return "basketball"
-    if any(k in text for k in ("力量", "撸铁", "健身", "举铁", "深蹲", "卧推", "硬拉")) or "strength" in t or "gym" in t:
+    if (
+        any(k in text for k in ("力量", "撸铁", "健身", "举铁", "深蹲", "卧推", "硬拉"))
+        or "strength" in t
+        or "gym" in t
+    ):
         return "strength"
     return None
 
@@ -178,4 +188,3 @@ def preprocess_message(message: str, reference_date: date) -> PreprocessResult:
     hints = {k: v for k, v in hints.items() if v is not None}
 
     return PreprocessResult(normalized_text=normalized, hints=hints)
-
