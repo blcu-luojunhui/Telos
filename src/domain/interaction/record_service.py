@@ -1,15 +1,21 @@
 """
 根据解析结果写入数据层（workouts / meals / body_metrics / goals）。
-
 record_status 写入 body_metrics 的 note（或单行仅 date + note）。
 """
+
 from datetime import date
 from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.database.mysql import SessionLocal, Workout, Meal, BodyMetric, Goal
-from src.core.interaction.schemas import IntentType, ParsedRecord
+from src.core.database.mysql import (
+    async_mysql_pool,
+    Workout,
+    Meal,
+    BodyMetric,
+    Goal
+)
+from src.domain.interaction.schemas import IntentType, ParsedRecord
 
 
 async def apply_parsed_record(parsed: ParsedRecord) -> dict[str, Any]:
@@ -20,43 +26,86 @@ async def apply_parsed_record(parsed: ParsedRecord) -> dict[str, Any]:
     :return: {"ok": True/False, "intent": ..., "table": ..., "id": ..., "error": ...}
     """
     if parsed.intent == IntentType.UNKNOWN:
-        return {"ok": False, "intent": "unknown", "table": None, "id": None, "error": "意图无法识别"}
+        return {
+            "ok": False,
+            "intent": "unknown",
+            "table": None,
+            "id": None,
+            "error": "意图无法识别",
+        }
 
     payload = parsed.payload or {}
     d = parsed.date or date.today()
 
-    async with SessionLocal() as session:
+    async with async_mysql_pool.session() as session:
         try:
             if parsed.intent == IntentType.RECORD_WORKOUT:
                 row = await _insert_workout(session, d, payload)
                 await session.commit()
-                return {"ok": True, "intent": "record_workout", "table": "workouts", "id": row.id}
+                return {
+                    "ok": True,
+                    "intent": "record_workout",
+                    "table": "workouts",
+                    "id": row.id,
+                }
 
             if parsed.intent == IntentType.RECORD_MEAL:
                 row = await _insert_meal(session, d, payload)
                 await session.commit()
-                return {"ok": True, "intent": "record_meal", "table": "meals", "id": row.id}
+                return {
+                    "ok": True,
+                    "intent": "record_meal",
+                    "table": "meals",
+                    "id": row.id,
+                }
 
             if parsed.intent == IntentType.RECORD_BODY_METRIC:
                 row = await _insert_body_metric(session, d, payload)
                 await session.commit()
-                return {"ok": True, "intent": "record_body_metric", "table": "body_metrics", "id": row.id}
+                return {
+                    "ok": True,
+                    "intent": "record_body_metric",
+                    "table": "body_metrics",
+                    "id": row.id,
+                }
 
             if parsed.intent == IntentType.SET_GOAL:
                 row = await _insert_goal(session, payload)
                 await session.commit()
-                return {"ok": True, "intent": "set_goal", "table": "goals", "id": row.id}
+                return {
+                    "ok": True,
+                    "intent": "set_goal",
+                    "table": "goals",
+                    "id": row.id,
+                }
 
             if parsed.intent == IntentType.RECORD_STATUS:
                 row = await _insert_status(session, d, payload, parsed.raw_message)
                 await session.commit()
-                return {"ok": True, "intent": "record_status", "table": "body_metrics", "id": row.id}
+                return {
+                    "ok": True,
+                    "intent": "record_status",
+                    "table": "body_metrics",
+                    "id": row.id,
+                }
 
         except Exception as e:
             await session.rollback()
-            return {"ok": False, "intent": parsed.intent.value, "table": None, "id": None, "error": str(e)}
+            return {
+                "ok": False,
+                "intent": parsed.intent.value,
+                "table": None,
+                "id": None,
+                "error": str(e),
+            }
 
-    return {"ok": False, "intent": parsed.intent.value, "table": None, "id": None, "error": "未处理意图"}
+    return {
+        "ok": False,
+        "intent": parsed.intent.value,
+        "table": None,
+        "id": None,
+        "error": "未处理意图",
+    }
 
 
 def _get(data: dict, key: str, default=None):
@@ -103,7 +152,9 @@ async def _insert_meal(session: AsyncSession, d: date, payload: dict) -> Meal:
     return m
 
 
-async def _insert_body_metric(session: AsyncSession, d: date, payload: dict) -> BodyMetric:
+async def _insert_body_metric(
+    session: AsyncSession, d: date, payload: dict
+) -> BodyMetric:
     b = BodyMetric(
         date=d,
         weight=_get(payload, "weight"),
@@ -146,7 +197,9 @@ async def _insert_goal(session: AsyncSession, payload: dict) -> Goal:
     return g
 
 
-async def _insert_status(session: AsyncSession, d: date, payload: dict, raw: str) -> BodyMetric:
+async def _insert_status(
+    session: AsyncSession, d: date, payload: dict, raw: str
+) -> BodyMetric:
     """今日状态写入 body_metrics：用 note 存描述，可选 mood/精力/压力。"""
     note = _get(payload, "note") or raw
     b = BodyMetric(

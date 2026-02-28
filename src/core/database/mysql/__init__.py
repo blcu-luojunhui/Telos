@@ -1,13 +1,13 @@
-from .base import Base, init_mysql, close_mysql, create_tables, get_db, SessionLocal
+from .base import Base, AsyncMySQL
 from .models import Workout, BodyMetric, Meal, UserProfile, Goal
 
+# 异步 Mysql POOL
+async_mysql_pool = AsyncMySQL()
+
 __all__ = [
+    "async_mysql_pool",
     "Base",
-    "init_mysql",
-    "close_mysql",
-    "create_tables",
-    "get_db",
-    "SessionLocal",
+    "AsyncMySQL",
     "Workout",
     "BodyMetric",
     "Meal",

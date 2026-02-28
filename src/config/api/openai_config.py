@@ -1,4 +1,5 @@
 """OpenAI 配置，用于 NLU 解析等。"""
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 

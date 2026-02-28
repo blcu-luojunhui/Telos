@@ -1,4 +1,4 @@
 from .jwt import create_token, decode_token
+from .log_format import PrettyFormatter, setup_logging
 
-
-__ALL__ = ["create_token", "decode_token"]
+__all__ = ["create_token", "decode_token", "setup_logging", "PrettyFormatter"]

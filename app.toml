@@ -1,0 +1,5 @@
+bind = "0.0.0.0:6666"
+workers = 1
+keep_alive_timeout = 120  # 保持连接的最大秒数，根据需要调整
+graceful_timeout = 300    # 重启或停止之前等待当前工作完成的时间
+loglevel = "INFO"  # 日志级别

@@ -5,6 +5,7 @@
 - schemas: 意图与 payload 的 Pydantic 模型
 - record_service: 根据解析结果写入 MySQL（workouts / meals / body_metrics / goals）
 """
+
 from .schemas import (
     ParsedRecord,
     IntentType,
@@ -28,4 +29,3 @@ __all__ = [
     "parse_user_message",
     "apply_parsed_record",
 ]
-

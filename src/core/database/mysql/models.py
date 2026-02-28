@@ -2,10 +2,10 @@
 ORM models (mappers) for better_me MySQL data layer.
 Tables: workouts, body_metrics, meals, user_profile, goals.
 
-使用方式：先 init_mysql(app) 或 init_mysql(dsn=...)，再通过 get_db() 或 SessionLocal 取 Session，例如：
-    from src.core.database.mysql import get_db, Workout
+使用方式：先 db.init(app) 或 db.init(dsn=...)，再通过 db.session() 取 Session，例如：
+    from src.core.database.mysql import db, Workout
     from sqlalchemy import select
-    async with SessionLocal() as session:
+    async with db.session() as session:
         result = await session.execute(select(Workout).where(Workout.date >= ...))
 """
 

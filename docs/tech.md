@@ -161,7 +161,10 @@
   - Body：`{"message": "今天中午吃了牛肉面，挺饱的", "date": "2025-02-27"}`（`date` 可选，默认当天）  
   - 返回：解析结果（intent、date、payload）与落表结果（表名、新记录 id 或错误信息）。
 
-- **配置**：`.env` 中需配置 `OPENAI_API_KEY`、可选 `OPENAI_MODEL`（默认 gpt-4o）。MySQL 启动时通过 `init_mysql(app)` 初始化，供落表使用。
+- **配置**：通过 `LLM_PROVIDER` 选择供应商（默认 `deepseek`，可选 `openai`）。  
+  - **DeepSeek**：`DEEP_SEEK_API_KEY`、可选 `DEEP_SEEK_MODEL`（默认 deepseek-chat）、`DEEP_SEEK_BASE_URL`。  
+  - **OpenAI**：`OPENAI_API_KEY`、可选 `OPENAI_MODEL`（默认 gpt-4o）。  
+  MySQL 启动时通过 `db.init(app)` 初始化，供落表使用；建表在 `before_serving` 中调用 `await db.create_tables()`。
 
 1. **CLI / Notebook 交互（MVP）**
    - 通过命令行/Notebook 与 agent 对话：
