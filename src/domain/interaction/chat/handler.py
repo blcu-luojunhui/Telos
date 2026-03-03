@@ -41,13 +41,19 @@ async def handle_chat_message(
     ref = reference_date or date.today()
     msg = message.strip()
 
+    # 先取历史，再写入当前这一轮，避免把当前轮重复塞进“历史”里
+    history = await session.get_recent_history()
     await session.add_turn("user", msg)
 
     if await session.has_pending():
         return await _handle_pending(session, msg)
 
     try:
-        parsed = await parse_user_message(msg, reference_date=ref)
+        parsed = await parse_user_message(
+            msg,
+            reference_date=ref,
+            history=history,
+        )
         parsed.user_id = user_id
     except Exception as e:
         reply = f"抱歉，解析时出了问题：{e}"

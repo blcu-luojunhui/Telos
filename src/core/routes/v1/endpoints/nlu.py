@@ -31,6 +31,7 @@ def create_nlu_bp() -> Blueprint:
                 pass
 
         try:
+            # 独立 NLU 接口默认不带多轮上下文；如需，可以后续扩展传入 history
             parsed = await parse_user_message(message, reference_date=ref_date)
             return jsonify(
                 {
