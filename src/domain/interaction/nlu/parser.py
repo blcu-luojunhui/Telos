@@ -7,10 +7,11 @@
 
 from datetime import date
 import json
-from typing import Optional
+from typing import Optional, Sequence
 
 from src.domain.interaction.schemas import IntentType, ParsedRecord
 from src.config import Config, LLMProviderType
+from src.infra.external import LLMGateway
 from src.domain.interaction.nlu.preprocess import preprocess_message
 from src.domain.interaction.nlu.normalize_validate import (
     normalize_date,
@@ -151,37 +152,10 @@ def _extract_json(text: str) -> dict:
         return {}
 
 
-def _get_llm_client_and_model(provider: LLMProviderType):
-    """
-    根据当前配置返回 (AsyncOpenAI client, model_name)。
-    DeepSeek 与 OpenAI 均使用 OpenAI 兼容接口，通过 base_url 区分。
-    """
-    try:
-        from openai import AsyncOpenAI
-    except ImportError:
-        raise RuntimeError(
-            "请安装 openai: pip install openai（DeepSeek 也使用该客户端）"
-        )
-
-    cfg = Config()
-    if provider == "deepseek":
-        d = cfg.deepseek
-        if not d.api_key:
-            raise ValueError("DeepSeek API Key 未配置（DEEP_SEEK_API_KEY）")
-        client = AsyncOpenAI(api_key=d.api_key, base_url=d.base_url)
-        return client, d.model
-    if provider == "openai":
-        o = cfg.openai
-        if not o.api_key:
-            raise ValueError("OpenAI API Key 未配置（OPENAI_API_KEY）")
-        client = AsyncOpenAI(api_key=o.api_key)
-        return client, o.model
-    raise ValueError(f"不支持的 LLM 供应商: {provider}，可选: deepseek | openai")
-
-
 async def parse_user_message(
     message: str,
     reference_date: Optional[date] = None,
+    history: Optional[Sequence[dict]] = None,
 ) -> ParsedRecord:
     """
     将用户自然语言解析为结构化记录。
@@ -196,25 +170,46 @@ async def parse_user_message(
     # Stage 0：预处理（日期/餐次/运动类型/单位归一提示）
     pre = preprocess_message(message, ref)
 
+    # 构建对话历史（用于让模型理解上下文，如「和刚才一样」「帮我再记一条」）
+    history_lines: list[str] = []
+    if history:
+        for turn in history:
+            role = str(turn.get("role") or "").strip() or "user"
+            content = str(turn.get("content") or "").strip()
+            if not content:
+                continue
+            # 限制每条历史长度，避免 prompt 过长
+            if len(content) > 200:
+                content = content[:200] + "…"
+            history_lines.append(f"{role}: {content}")
+
+    history_block = ""
+    if history_lines:
+        history_block = (
+            "对话历史（从旧到新，最多最近若干条）：\n"
+            + "\n".join(history_lines)
+            + "\n\n"
+        )
+
     provider: LLMProviderType = Config().llm_provider
-    client, model = _get_llm_client_and_model(provider)
+    gateway = LLMGateway(provider=provider)
 
     user_content = (
         f"参考日期（若用户未说日期则用此日）：{ref_str}\n"
         f"预处理提示（高置信线索）：{json.dumps(pre.hints, ensure_ascii=False)}\n\n"
-        f"用户输入（原文）：{message.strip()}\n"
-        f"用户输入（轻量归一）：{pre.normalized_text}"
+        f"{history_block}"
+        f"当前轮用户输入（原文）：{message.strip()}\n"
+        f"当前轮用户输入（轻量归一）：{pre.normalized_text}"
     )
 
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[
+    result = await gateway.chat(
+        [
             {"role": "system", "content": SYSTEM_PROMPT + "\n\n" + FEW_SHOT_EXAMPLES},
             {"role": "user", "content": user_content},
         ],
         temperature=0.1,
     )
-    text = response.choices[0].message.content or "{}"
+    text = result.text or "{}"
     data = _extract_json(text)
 
     # Stage 2：归一化 + 校验（失败则 repair）
@@ -233,9 +228,8 @@ async def parse_user_message(
             f"校验错误：{err}\n"
             f"请输出修复后的 JSON。"
         )
-        repair_resp = await client.chat.completions.create(
-            model=model,
-            messages=[
+        repair_result = await gateway.chat(
+            [
                 {
                     "role": "system",
                     "content": REPAIR_SYSTEM_PROMPT + "\n\n" + SYSTEM_PROMPT,
@@ -244,7 +238,7 @@ async def parse_user_message(
             ],
             temperature=0.0,
         )
-        repair_text = repair_resp.choices[0].message.content or "{}"
+        repair_text = repair_result.text or "{}"
         repair_data = _extract_json(repair_text)
 
         intent = normalize_intent(repair_data.get("intent"))

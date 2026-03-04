@@ -9,12 +9,20 @@ from datetime import date
 
 from src.domain.interaction.nlu import parse_user_message
 from src.domain.interaction.record import apply_parsed_record
-from src.domain.interaction.duplicate_checker import check_duplicate
+from src.domain.interaction.duplicate_checker import (
+    check_duplicate,
+    build_domain_record_and_inject_meal,
+)
 from src.domain.interaction.schemas import IntentType, ParsedRecord
 
-from .session import UserSession, PendingConfirm, get_user_session
-from .response import ChatResponse
 from .display import parsed_dict, intent_cn, payload_summary
+from .session import UserSession
+from .session import PendingConfirm
+from .session import get_user_session
+from .session import get_or_create_conversation
+from .response import ChatResponse
+from .small_chat import small_chat_reply
+
 
 _CONFIRM_KEYWORDS = {
     "确认",
@@ -28,26 +36,35 @@ _CONFIRM_KEYWORDS = {
     "yes",
     "y",
     "ok",
+    "1",
 }
-_CANCEL_KEYWORDS = {"取消", "不", "不要", "算了", "no", "n", "cancel"}
+_CANCEL_KEYWORDS = {"取消", "不", "不要", "算了", "no", "n", "cancel", "0"}
 
 
 async def handle_chat_message(
     user_id: str,
     message: str,
     reference_date: date | None = None,
+    conversation_id: int | None = None,
 ) -> ChatResponse:
-    session = get_user_session(user_id)
+    conv_id = await get_or_create_conversation(user_id, conversation_id)
+    session = get_user_session(user_id, conv_id)
     ref = reference_date or date.today()
     msg = message.strip()
 
+    # 先取历史，再写入当前这一轮，避免把当前轮重复塞进“历史”里
+    history = await session.get_recent_history()
     await session.add_turn("user", msg)
 
     if await session.has_pending():
-        return await _handle_pending(session, msg)
+        return await _handle_pending(session, msg, conv_id)
 
     try:
-        parsed = await parse_user_message(msg, reference_date=ref)
+        parsed = await parse_user_message(
+            msg,
+            reference_date=ref,
+            history=history,
+        )
         parsed.user_id = user_id
     except Exception as e:
         reply = f"抱歉，解析时出了问题：{e}"
@@ -56,21 +73,23 @@ async def handle_chat_message(
             user_id=user_id,
             type="error",
             message=reply,
+            conversation_id=conv_id,
         )
 
     if parsed.intent == IntentType.UNKNOWN:
-        reply = "抱歉，我没有理解你的意思。你可以告诉我你吃了什么、做了什么运动、或者记录身体数据。"
-        await session.add_turn("assistant", reply, msg_type="unknown")
+        # 未识别到结构化记录意图时，进入小聊天/唤起模式，仅返回自然语言回复
+        reply = await small_chat_reply(user_id=user_id, message=msg, history=history)
+        await session.add_turn("assistant", reply, msg_type="chat_only")
         return ChatResponse(
             user_id=user_id,
-            type="unknown",
+            type="chat_only",
             message=reply,
-            parsed=parsed_dict(parsed),
+            conversation_id=conv_id,
+            parsed=None,
         )
 
-    dup = await check_duplicate(
-        user_id, parsed.intent, parsed.date or ref, parsed.payload or {}
-    )
+    dr = build_domain_record_and_inject_meal(parsed, user_id, ref, history)
+    dup = await check_duplicate(dr)
 
     if dup is not None:
         if dup.same_content:
@@ -80,6 +99,7 @@ async def handle_chat_message(
                 user_id=user_id,
                 type="duplicate_same",
                 message=reply,
+                conversation_id=conv_id,
                 parsed=parsed_dict(parsed),
                 conflict={
                     "existing_id": dup.existing_id,
@@ -100,6 +120,7 @@ async def handle_chat_message(
                 user_id=user_id,
                 type="needs_confirm",
                 message=reply,
+                conversation_id=conv_id,
                 parsed=parsed_dict(parsed),
                 conflict={
                     "existing_id": dup.existing_id,
@@ -108,21 +129,28 @@ async def handle_chat_message(
                 },
             )
 
-    return await _save_and_reply(session, parsed)
+    return await _save_and_reply(session, parsed, conv_id)
 
 
-async def _handle_pending(session: UserSession, msg: str) -> ChatResponse:
+async def _handle_pending(
+    session: UserSession, msg: str, conversation_id: int
+) -> ChatResponse:
     pending = await session.get_pending()
     normalized = msg.strip().lower()
 
     if pending is None:
         await session.clear_pending()
-        return await handle_chat_message(session.user_id, msg)
+        return await handle_chat_message(
+            session.user_id, msg, conversation_id=conversation_id
+        )
 
     if normalized in _CONFIRM_KEYWORDS:
         await session.clear_pending()
         return await _save_and_reply(
-            session, pending.parsed, replace_id=pending.duplicate.existing_id
+            session,
+            pending.parsed,
+            conversation_id,
+            replace_id=pending.duplicate.existing_id,
         )
 
     if normalized in _CANCEL_KEYWORDS:
@@ -133,22 +161,26 @@ async def _handle_pending(session: UserSession, msg: str) -> ChatResponse:
             user_id=session.user_id,
             type="cancelled",
             message=reply,
+            conversation_id=conversation_id,
         )
 
     # 既不确认也不取消，视为新消息
     await session.clear_pending()
-    await session.add_turn("system", "pending expired: new message received")
-    return await handle_chat_message(session.user_id, msg)
+    return await handle_chat_message(
+        session.user_id, msg, conversation_id=conversation_id
+    )
 
 
 async def _save_and_reply(
     session: UserSession,
     parsed: ParsedRecord,
+    conversation_id: int,
     replace_id: int | None = None,
 ) -> ChatResponse:
+    # 确认覆盖时 pending.parsed 从 DB 反序列化可能无 user_id，统一用当前会话用户
+    parsed.user_id = session.user_id
     if replace_id is not None:
-        await _soft_delete_existing(parsed.intent, replace_id)
-
+        await _soft_delete_existing(parsed.intent, replace_id, session.user_id)
     result = await apply_parsed_record(parsed)
 
     if result.get("ok"):
@@ -165,6 +197,7 @@ async def _save_and_reply(
             user_id=session.user_id,
             type=msg_type,
             message=reply,
+            conversation_id=conversation_id,
             parsed=parsed_dict(parsed),
             saved=result,
         )
@@ -175,12 +208,15 @@ async def _save_and_reply(
             user_id=session.user_id,
             type="error",
             message=reply,
+            conversation_id=conversation_id,
             parsed=parsed_dict(parsed),
         )
 
 
-async def _soft_delete_existing(intent: IntentType, record_id: int) -> None:
-    """逻辑删除：将旧记录 status 设为 'replaced'。"""
+async def _soft_delete_existing(
+    intent: IntentType, record_id: int, user_id: str
+) -> None:
+    """逻辑删除：将当前用户下该条旧记录 status 设为 'replaced'。"""
     from src.core.database.mysql import (
         async_mysql_pool,
         Workout,
@@ -197,10 +233,12 @@ async def _soft_delete_existing(intent: IntentType, record_id: int) -> None:
         IntentType.SET_GOAL: Goal,
     }
     model = model_map.get(intent)
-    if not model:
+    if not model or not (user_id or "").strip():
         return
     async with async_mysql_pool.session() as session:
         await session.execute(
-            update(model).where(model.id == record_id).values(status="replaced")
+            update(model)
+            .where(model.id == record_id, model.user_id == user_id)
+            .values(status="replaced")
         )
         await session.commit()

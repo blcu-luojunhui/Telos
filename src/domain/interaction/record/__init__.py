@@ -9,6 +9,7 @@ from src.domain.interaction.schemas import IntentType, ParsedRecord
 from ._body_metric import insert_body_metric
 from ._body_metric import insert_status
 from ._goal import insert_goal
+from ._training_plan import maybe_create_training_plan_for_goal
 from ._meal import insert_meal
 from ._workout import insert_workout
 
@@ -29,9 +30,18 @@ async def apply_parsed_record(parsed: ParsedRecord) -> dict[str, Any]:
             "error": "意图无法识别",
         }
 
+    uid = (parsed.user_id or "").strip()
+    if not uid:
+        return {
+            "ok": False,
+            "intent": parsed.intent.value,
+            "table": None,
+            "id": None,
+            "error": "user_id 不能为空",
+        }
+
     payload = parsed.payload or {}
     d = parsed.date or date.today()
-    uid = parsed.user_id
 
     async with async_mysql_pool.session() as session:
         try:
@@ -67,6 +77,8 @@ async def apply_parsed_record(parsed: ParsedRecord) -> dict[str, Any]:
 
             if parsed.intent == IntentType.SET_GOAL:
                 row = await insert_goal(session, uid, payload)
+                # 为部分目标（如 race / weight_loss）自动生成基础训练计划
+                await maybe_create_training_plan_for_goal(session, uid, row, d)
                 await session.commit()
                 return {
                     "ok": True,
