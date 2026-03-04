@@ -1,6 +1,6 @@
 """
 ORM models (mappers) for better_me MySQL data layer.
-Tables: workouts, body_metrics, meals, user_profile, goals, chat_messages.
+Tables: workouts, body_metrics, meals, user_profile, goals, conversations, chat_messages, pending_confirmations.
 
 使用方式：先 db.init(app) 或 db.init(dsn=...)，再通过 db.session() 取 Session，例如：
     from src.core.database.mysql import db, Workout
@@ -12,7 +12,7 @@ Tables: workouts, body_metrics, meals, user_profile, goals, chat_messages.
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, Float, Integer, String, Text, JSON
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -192,16 +192,74 @@ class Goal(Base):
 
 
 # ---------------------------------------------------------------------------
-# 对话消息 chat_messages（按 user_id 存储对话上下文）
+# 训练计划 training_plans（按用户+目标长期存储计划结构）
+# ---------------------------------------------------------------------------
+
+
+class TrainingPlan(Base):
+    """训练计划：按天/阶段安排训练内容，存为 JSON 结构，后续可用于提醒与调整。"""
+
+    __tablename__ = "training_plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    goal_type: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )  # 如 half_marathon / 10k / weight_loss
+    start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    plan: Mapped[dict] = mapped_column(
+        JSON, nullable=False
+    )  # 完整计划结构（按天/阶段拆分）
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="active", index=True
+    )  # active / archived / completed
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+# ---------------------------------------------------------------------------
+# 会话 conversations（按会话维度隔离上下文）
+# ---------------------------------------------------------------------------
+
+
+class Conversation(Base):
+    """会话：一个用户可有多个会话，每个会话有独立消息列表。"""
+
+    __tablename__ = "conversations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="active", server_default="active", index=True
+    )  # active / archived
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+# ---------------------------------------------------------------------------
+# 对话消息 chat_messages（按 conversation_id 归属会话）
 # ---------------------------------------------------------------------------
 
 
 class ChatMessage(Base):
-    """对话消息记录：每条用户/助手消息都持久化，用于上下文感知。"""
+    """对话消息记录：归属某会话，用于上下文感知。"""
 
     __tablename__ = "chat_messages"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )  # 为空表示迁移前旧数据，新数据必填
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     role: Mapped[str] = mapped_column(
         String(16), nullable=False
@@ -209,6 +267,26 @@ class ChatMessage(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     msg_type: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True
-    )  # saved / needs_confirm / confirmed / cancelled / error / unknown / None
-    extra: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    )  # normal / saved / needs_confirm / confirmed / cancelled / error / unknown
+    extra: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 扩展：saved 结果等；pending 已迁至 pending_confirmations
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+# ---------------------------------------------------------------------------
+# 待确认状态 pending_confirmations（与消息表解耦）
+# ---------------------------------------------------------------------------
+
+
+class PendingConfirmation(Base):
+    """待用户确认的覆盖操作：进入需要确认时插入，确认/取消后删除。"""
+
+    __tablename__ = "pending_confirmations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    conversation_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    parsed_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    duplicate_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

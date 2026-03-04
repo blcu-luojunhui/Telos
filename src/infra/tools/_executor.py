@@ -1,6 +1,7 @@
 from typing import Any
 from ._tool import Tool
 
+
 class ToolExecutor:
     """
     管理一组工具：生成给 LLM 看的描述文本，并按名称执行。

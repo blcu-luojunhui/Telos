@@ -1,6 +1,7 @@
 """
 Agent 工具抽象：工具描述 + 执行器，供多种 Agent 复用。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

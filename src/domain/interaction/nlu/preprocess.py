@@ -69,7 +69,7 @@ def _hint_meal_type(text: str) -> str | None:
     t = text.lower()
     if any(k in text for k in ("早餐", "早饭")) or "breakfast" in t:
         return "breakfast"
-    if any(k in text for k in ("午餐", "午饭", "中午饭", "中饭")) or "lunch" in t:
+    if any(k in text for k in ("午餐", "午饭", "中午饭", "中饭", "中午")) or "lunch" in t:
         return "lunch"
     if any(k in text for k in ("晚餐", "晚饭", "晚饭吃", "晚饭了")) or "dinner" in t:
         return "dinner"

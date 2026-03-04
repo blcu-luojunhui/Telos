@@ -1,21 +1,22 @@
 """
-重复记录检测：根据 intent + date + 子类型，查库判断是否已有类似记录。
+重复检测：策略化引擎，根据 DomainRecord 查库并返回 DuplicateHit。
 
-返回：
-- None  → 无重复
-- existing_rows list → 有潜在重复，附带是否"内容相同"标记
+- to_domain_record(parsed, user_id, ref_date, history) 将 NLU 结果归一为 DomainRecord（含餐次推断）
+- check_duplicate(dr) 走策略注册表，返回 None 或 DuplicateHit
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Optional
+from typing import Optional, Sequence
 
-from sqlalchemy import select
-
-from src.core.database.mysql import async_mysql_pool, Workout, Meal, BodyMetric, Goal
-from src.domain.interaction.schemas import IntentType
+from src.domain.interaction.duplicate_checker.domain_record import (
+    DomainRecord,
+    to_domain_record,
+)
+from src.domain.interaction.duplicate_checker.policies import POLICIES
+from src.domain.interaction.schemas import IntentType, ParsedRecord
 
 
 @dataclass
@@ -26,171 +27,62 @@ class DuplicateHit:
     summary: str
 
 
-async def check_duplicate(
+async def check_duplicate(dr: DomainRecord) -> Optional[DuplicateHit]:
+    """
+    统一入口：按意图选用策略，查库并比较内容。
+    若有同类记录则返回 DuplicateHit，否则返回 None。
+    """
+    policy = POLICIES.get(dr.intent)
+    if not policy:
+        return None
+
+    stmt = policy.build_query(dr)
+    if stmt is None:
+        return None
+
+    from src.core.database.mysql import async_mysql_pool
+
+    async with async_mysql_pool.session() as session:
+        result = await session.execute(stmt)
+        row = result.scalars().first()
+
+    if not row:
+        return None
+
+    existing_content = policy.extract_content(row)
+    same = policy.is_same(existing_content, dr.content)
+    summary = policy.summary(row, existing_content)
+
+    return DuplicateHit(
+        existing_id=row.id,
+        table=policy.table_name,
+        same_content=same,
+        summary=summary,
+    )
+
+
+def build_domain_record_and_inject_meal(
+    parsed: ParsedRecord,
     user_id: str,
-    intent: IntentType,
-    record_date: date,
-    payload: dict[str, Any],
-) -> Optional[DuplicateHit]:
+    ref_date: date,
+    history: Optional[Sequence[dict]] = None,
+) -> DomainRecord:
     """
-    检查该用户当天是否已有"同类"记录。
-    如果有，判断内容是否一致，返回 DuplicateHit；没有则返回 None。
+    将 ParsedRecord 转为 DomainRecord，并对 RECORD_MEAL 回写 meal_type 到 parsed.payload，
+    保证落库与判重使用同一餐次。
     """
-    if intent == IntentType.RECORD_MEAL:
-        return await _check_meal(user_id, record_date, payload)
-    if intent == IntentType.RECORD_WORKOUT:
-        return await _check_workout(user_id, record_date, payload)
-    if intent == IntentType.RECORD_BODY_METRIC:
-        return await _check_body_metric(user_id, record_date, payload)
-    if intent == IntentType.SET_GOAL:
-        return await _check_goal(user_id, payload)
-    return None
+    dr = to_domain_record(parsed, user_id, ref_date, history)
+    if parsed.intent == IntentType.RECORD_MEAL and "meal_type" in dr.primary_scope:
+        if parsed.payload is None:
+            parsed.payload = {}
+        parsed.payload["meal_type"] = dr.primary_scope["meal_type"]
+    return dr
 
 
-async def _check_meal(user_id: str, d: date, payload: dict) -> Optional[DuplicateHit]:
-    meal_type = payload.get("meal_type")
-    if not meal_type:
-        return None
-
-    async with async_mysql_pool.session() as session:
-        stmt = select(Meal).where(
-            Meal.user_id == user_id,
-            Meal.date == d,
-            Meal.meal_type == meal_type,
-            Meal.status == "active",
-        )
-        result = await session.execute(stmt)
-        existing = result.scalars().first()
-        if not existing:
-            return None
-
-        new_food = (payload.get("food_items") or "").strip().lower()
-        old_food = (existing.food_items or "").strip().lower()
-        same = new_food == old_food
-
-        return DuplicateHit(
-            existing_id=existing.id,
-            table="meals",
-            same_content=same,
-            summary=f"已有{_meal_type_cn(meal_type)}记录：{existing.food_items}",
-        )
-
-
-async def _check_workout(
-    user_id: str, d: date, payload: dict
-) -> Optional[DuplicateHit]:
-    w_type = payload.get("type")
-    if not w_type:
-        return None
-
-    async with async_mysql_pool.session() as session:
-        stmt = select(Workout).where(
-            Workout.user_id == user_id,
-            Workout.date == d,
-            Workout.type == w_type,
-            Workout.status == "active",
-        )
-        result = await session.execute(stmt)
-        existing = result.scalars().first()
-        if not existing:
-            return None
-
-        same = _workout_same(existing, payload)
-        summary_parts = [_workout_type_cn(w_type)]
-        if existing.duration_min:
-            summary_parts.append(f"{existing.duration_min}分钟")
-        if existing.distance_km:
-            summary_parts.append(f"{existing.distance_km}km")
-
-        return DuplicateHit(
-            existing_id=existing.id,
-            table="workouts",
-            same_content=same,
-            summary=f"已有{' '.join(summary_parts)}记录",
-        )
-
-
-async def _check_body_metric(
-    user_id: str, d: date, payload: dict
-) -> Optional[DuplicateHit]:
-    async with async_mysql_pool.session() as session:
-        stmt = select(BodyMetric).where(
-            BodyMetric.user_id == user_id,
-            BodyMetric.date == d,
-            BodyMetric.status == "active",
-        )
-        result = await session.execute(stmt)
-        existing = result.scalars().first()
-        if not existing:
-            return None
-
-        same = _body_metric_same(existing, payload)
-        parts = []
-        if existing.weight:
-            parts.append(f"体重{existing.weight}kg")
-        if existing.sleep_hours:
-            parts.append(f"睡眠{existing.sleep_hours}h")
-
-        return DuplicateHit(
-            existing_id=existing.id,
-            table="body_metrics",
-            same_content=same,
-            summary=f"已有身体指标记录：{'、'.join(parts)}"
-            if parts
-            else "已有身体指标记录",
-        )
-
-
-async def _check_goal(user_id: str, payload: dict) -> Optional[DuplicateHit]:
-    g_type = payload.get("type")
-    if not g_type:
-        return None
-
-    async with async_mysql_pool.session() as session:
-        stmt = select(Goal).where(
-            Goal.user_id == user_id,
-            Goal.type == g_type,
-            Goal.status.in_(["planning", "ongoing"]),
-        )
-        result = await session.execute(stmt)
-        existing = result.scalars().first()
-        if not existing:
-            return None
-
-        return DuplicateHit(
-            existing_id=existing.id,
-            table="goals",
-            same_content=False,
-            summary=f"已有进行中的{g_type}目标",
-        )
-
-
-def _workout_same(existing: Workout, payload: dict) -> bool:
-    for key in ("duration_min", "distance_km", "avg_pace", "avg_hr", "calories"):
-        ev = getattr(existing, key, None)
-        pv = payload.get(key)
-        if ev is not None and pv is not None and ev != pv:
-            return False
-    return True
-
-
-def _body_metric_same(existing: BodyMetric, payload: dict) -> bool:
-    for key in ("weight", "body_fat", "muscle_mass", "resting_hr", "sleep_hours"):
-        ev = getattr(existing, key, None)
-        pv = payload.get(key)
-        if ev is not None and pv is not None and ev != pv:
-            return False
-    return True
-
-
-def _meal_type_cn(t: str) -> str:
-    return {
-        "breakfast": "早餐",
-        "lunch": "午餐",
-        "dinner": "晚餐",
-        "snack": "加餐",
-    }.get(t, t)
-
-
-def _workout_type_cn(t: str) -> str:
-    return {"run": "跑步", "basketball": "篮球", "strength": "力量训练"}.get(t, t)
+__all__ = [
+    "DuplicateHit",
+    "DomainRecord",
+    "to_domain_record",
+    "check_duplicate",
+    "build_domain_record_and_inject_meal",
+]

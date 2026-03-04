@@ -16,7 +16,9 @@ from src.infra.shared.types import (
 )
 
 
-def get_llm_client_and_model(provider: Optional[LLMProviderType] = None) -> tuple[Any, str]:
+def get_llm_client_and_model(
+    provider: Optional[LLMProviderType] = None,
+) -> tuple[Any, str]:
     """
     根据配置返回 (AsyncOpenAI client, model_name)。
     DeepSeek / OpenAI 均使用 OpenAI 兼容接口。
@@ -85,7 +87,9 @@ class LLMGateway:
     提供异步 chat / chat_with_tools，输入输出使用统一类型。
     """
 
-    def __init__(self, provider: Optional[LLMProviderType] = None, model: Optional[str] = None):
+    def __init__(
+        self, provider: Optional[LLMProviderType] = None, model: Optional[str] = None
+    ):
         self._provider = provider or Config().llm_provider
         self._client, self._model = get_llm_client_and_model(self._provider)
         if model is not None:

@@ -1,6 +1,7 @@
 """
 ReAct 智能体：Thought → Action → Observation 循环，直到 Finish 或达到最大步数。
 """
+
 from __future__ import annotations
 
 import re
@@ -17,6 +18,7 @@ from ._prompts import build_system_prompt, build_user_prompt
 @dataclass
 class ReActStep:
     """单步：思考 + 行动 + 观察（若有）。"""
+
     thought: str
     action: str  # 原始 Action 文本，如 "search[关键词]" 或 "Finish[答案]"
     observation: Optional[str] = None
@@ -25,6 +27,7 @@ class ReActStep:
 @dataclass
 class ReActResult:
     """一次 run 的结果。"""
+
     final_answer: Optional[str] = None  # Finish[answer] 时的 answer
     steps: list[ReActStep] = field(default_factory=list)
     success: bool = False
@@ -44,7 +47,9 @@ _ACTION_PATTERN = re.compile(
 _ACTION_CMD_PATTERN = re.compile(r"`?(\w+)\s*\[\s*([^\]]*)\s*\]`?", re.IGNORECASE)
 
 
-def _parse_thought_and_action(llm_text: str) -> tuple[str, Optional[str], Optional[str]]:
+def _parse_thought_and_action(
+    llm_text: str,
+) -> tuple[str, Optional[str], Optional[str]]:
     """
     解析 LLM 输出，返回 (thought, tool_name, tool_input)。
     若 Action 是 Finish[xxx]，tool_name 为 "Finish"，tool_input 为最终答案。
@@ -132,11 +137,15 @@ class ReActAgent:
 
             if not tool_name:
                 trajectory.append(ReActStep(thought=thought, action=text))
-                history_parts.append(f"Thought: {thought}\nAction: {text}\nObservation: 格式无效，请按 工具名[输入] 或 Finish[答案] 重试。")
+                history_parts.append(
+                    f"Thought: {thought}\nAction: {text}\nObservation: 格式无效，请按 工具名[输入] 或 Finish[答案] 重试。"
+                )
                 continue
 
             if tool_name.lower() == "finish":
-                trajectory.append(ReActStep(thought=thought, action=f"Finish[{tool_input}]"))
+                trajectory.append(
+                    ReActStep(thought=thought, action=f"Finish[{tool_input}]")
+                )
                 return ReActResult(
                     final_answer=tool_input or None,
                     steps=trajectory,
@@ -144,7 +153,11 @@ class ReActAgent:
                 )
 
             observation = self.tool_executor.run(tool_name, tool_input or "", **kwargs)
-            step = ReActStep(thought=thought, action=f"{tool_name}[{tool_input}]", observation=observation)
+            step = ReActStep(
+                thought=thought,
+                action=f"{tool_name}[{tool_input}]",
+                observation=observation,
+            )
             trajectory.append(step)
             history_parts.append(
                 f"Thought: {thought}\nAction: {tool_name}[{tool_input}]\nObservation: {observation}"

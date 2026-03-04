@@ -49,5 +49,11 @@ def build_system_prompt(tools_desc: str, with_few_shot: bool = True) -> str:
 
 
 def build_user_prompt(question: str, history: str) -> str:
-    history_section = f"已有轨迹（Thought / Action / Observation）：\n{history}" if history.strip() else "（尚无轨迹，请从第一步开始。）"
-    return REACT_USER_TEMPLATE.format(question=question, history_section=history_section)
+    history_section = (
+        f"已有轨迹（Thought / Action / Observation）：\n{history}"
+        if history.strip()
+        else "（尚无轨迹，请从第一步开始。）"
+    )
+    return REACT_USER_TEMPLATE.format(
+        question=question, history_section=history_section
+    )
