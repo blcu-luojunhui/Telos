@@ -7,11 +7,54 @@ from datetime import date
 
 from quart import Blueprint, request, jsonify
 
-from src.domain.interaction.chat import handle_chat_message
+from src.domain.interaction.chat import (
+    handle_chat_message,
+    get_latest_conversation_id,
+    get_user_session,
+    conversation_belongs_to_user,
+)
 
 
 def create_chat_bp() -> Blueprint:
     chat_bp = Blueprint("chat", __name__, url_prefix="/v1/api")
+
+    @chat_bp.route("/chat/history", methods=["GET"])
+    async def chat_history():
+        """
+        拉取会话历史，后端为唯一真相源。
+        Query: user_id（必填）, conversation_id（可选，不传则取该用户最近一次会话）
+        返回: { "conversation_id": number | null, "messages": [ { "role", "content", "msg_type", "sticker_id"? } ] }
+        """
+        user_id = (request.args.get("user_id") or "").strip()
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
+        conv_id_param = request.args.get("conversation_id")
+        conv_id = None
+        if conv_id_param is not None and conv_id_param != "":
+            try:
+                conv_id = int(conv_id_param)
+            except (TypeError, ValueError):
+                conv_id = None
+        if conv_id is None:
+            conv_id = await get_latest_conversation_id(user_id)
+        else:
+            if not await conversation_belongs_to_user(user_id, conv_id):
+                return jsonify({"conversation_id": None, "messages": []}), 200
+        if conv_id is None:
+            return jsonify({"conversation_id": None, "messages": []}), 200
+        session = get_user_session(user_id, conv_id)
+        history = await session.get_recent_history(limit=100)
+        messages = []
+        for h in history:
+            extra = h.get("extra") or {}
+            sticker_id = extra.get("sticker_id")
+            messages.append({
+                "role": h["role"],
+                "content": h["content"],
+                "msg_type": h.get("msg_type"),
+                **({"sticker_id": sticker_id} if sticker_id is not None else {}),
+            })
+        return jsonify({"conversation_id": conv_id, "messages": messages}), 200
 
     @chat_bp.route("/chat", methods=["POST"])
     async def chat():
@@ -67,17 +110,18 @@ def create_chat_bp() -> Blueprint:
                 reference_date=ref_date,
                 conversation_id=conv_id,
             )
-            return jsonify(
-                {
-                    "user_id": resp.user_id,
-                    "conversation_id": resp.conversation_id,
-                    "type": resp.type,
-                    "message": resp.message,
-                    "parsed": resp.parsed,
-                    "saved": resp.saved,
-                    "conflict": resp.conflict,
-                }
-            ), 200
+            out = {
+                "user_id": resp.user_id,
+                "conversation_id": resp.conversation_id,
+                "type": resp.type,
+                "message": resp.message,
+                "parsed": resp.parsed,
+                "saved": resp.saved,
+                "conflict": resp.conflict,
+            }
+            if getattr(resp, "sticker_id", None) is not None:
+                out["sticker_id"] = resp.sticker_id
+            return jsonify(out), 200
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
