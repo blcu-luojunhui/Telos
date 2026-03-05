@@ -19,7 +19,7 @@ from .schemas import (
 )
 from .nlu import parse_user_message
 from .record import apply_parsed_record
-from .chat import handle_chat_message
+from .chat import ChatResponse
 
 __all__ = [
     "ParsedRecord",
@@ -31,5 +31,5 @@ __all__ = [
     "RecordStatusPayload",
     "parse_user_message",
     "apply_parsed_record",
-    "handle_chat_message",
+    "ChatResponse",
 ]

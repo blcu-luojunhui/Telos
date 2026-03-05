@@ -5,14 +5,7 @@ Chat 接口：带上下文的对话式记录入口。
 
 from datetime import date
 
-from quart import Blueprint, request, jsonify
-
-from src.domain.interaction.chat import (
-    handle_chat_message,
-    get_latest_conversation_id,
-    get_user_session,
-    conversation_belongs_to_user,
-)
+from quart import Blueprint, request, jsonify, current_app
 
 
 def create_chat_bp() -> Blueprint:
@@ -35,14 +28,15 @@ def create_chat_bp() -> Blueprint:
                 conv_id = int(conv_id_param)
             except (TypeError, ValueError):
                 conv_id = None
+        svc = current_app.chat_service
         if conv_id is None:
-            conv_id = await get_latest_conversation_id(user_id)
+            conv_id = await svc.get_latest_conversation_id(user_id)
         else:
-            if not await conversation_belongs_to_user(user_id, conv_id):
+            if not await svc.conversation_belongs_to_user(user_id, conv_id):
                 return jsonify({"conversation_id": None, "messages": []}), 200
         if conv_id is None:
             return jsonify({"conversation_id": None, "messages": []}), 200
-        session = get_user_session(user_id, conv_id)
+        session = svc.get_user_session(user_id, conv_id)
         history = await session.get_recent_history(limit=100)
         messages = []
         for h in history:
@@ -104,7 +98,7 @@ def create_chat_bp() -> Blueprint:
                 conv_id = None
 
         try:
-            resp = await handle_chat_message(
+            resp = await current_app.chat_service.handle_chat_message(
                 user_id=user_id,
                 message=message,
                 reference_date=ref_date,

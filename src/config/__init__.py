@@ -1,14 +1,25 @@
-from typing import Literal
+from pathlib import Path
+from typing import Literal, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.config.api import OpenAIConfig
 from src.config.api import DeepSeekConfig
+from src.config.api import WechatSpiderConfig
 from src.config.database import BetterMeMySQLConfig
 
 # NLU 解析可选的 LLM 供应商
 LLMProviderType = Literal["deepseek", "openai"]
+
+
+def _default_soul_path() -> Optional[Path]:
+    """默认 soul 文件路径：项目根下 src/soul/rude.md（供小聊天人格注入）。"""
+    try:
+        root = Path(__file__).resolve().parent.parent.parent
+        return root / "src" / "soul" / "rude.md"
+    except Exception:
+        return None
 
 
 class Config(BaseSettings):
@@ -16,6 +27,10 @@ class Config(BaseSettings):
 
     # ============ 应用基础配置 ============
     app_name: str = Field(default="BetterMe", description="应用名称")
+    soul_file_path: Optional[Path] = Field(
+        default_factory=_default_soul_path,
+        description="小聊天人格设定文件路径（如 rude.md），不设则自动探测 src/soul/rude.md",
+    )
     environment: str = Field(
         default="development", description="运行环境: development/pre/production"
     )

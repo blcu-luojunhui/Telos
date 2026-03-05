@@ -2,7 +2,7 @@ from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.database.mysql import BodyMetric
+from src.infra.database.mysql import BodyMetric
 from .utils import _get
 
 

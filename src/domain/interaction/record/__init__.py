@@ -3,7 +3,7 @@
 from datetime import date
 from typing import Any
 
-from src.core.database.mysql import async_mysql_pool
+from src.infra.database.mysql import async_mysql_pool
 from src.domain.interaction.schemas import IntentType, ParsedRecord
 
 from ._body_metric import insert_body_metric

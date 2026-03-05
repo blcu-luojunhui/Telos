@@ -11,6 +11,7 @@ from .llm import (
     ToolDef,
     get_llm_client_and_model,
 )
+from .search import wechat_search
 
 __all__ = [
     "ChatCompletionResult",
@@ -19,4 +20,5 @@ __all__ = [
     "ToolCall",
     "ToolDef",
     "get_llm_client_and_model",
+    "wechat_search"
 ]

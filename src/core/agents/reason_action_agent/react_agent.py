@@ -152,7 +152,9 @@ class ReActAgent:
                     success=True,
                 )
 
-            observation = self.tool_executor.run(tool_name, tool_input or "", **kwargs)
+            observation = await self.tool_executor.run(
+                tool_name, tool_input or "", **kwargs
+            )
             step = ReActStep(
                 thought=thought,
                 action=f"{tool_name}[{tool_input}]",

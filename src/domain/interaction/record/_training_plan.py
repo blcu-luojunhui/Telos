@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.database.mysql import TrainingPlan, Goal
+from src.infra.database.mysql import TrainingPlan, Goal
 
 
 def _safe_date(d: Optional[date], fallback: date) -> date:

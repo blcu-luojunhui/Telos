@@ -7,24 +7,24 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Sequence
 
 from src.infra.external import LLMGateway
+from src.infra.tools import ToolExecutor, build_wechat_search_tool
+from src.core.agents import ReActAgent
+
+from src.config import Config
 
 from .stickers import parse_sticker_from_reply
 
-# 项目根目录（small_chat.py 在 src/domain/interaction/chat/ 下，5 层 parent 到项目根）
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
-_SOUL_PATH = _PROJECT_ROOT / "src" / "soul" / "rude.md"
-
 
 def _load_soul() -> str:
-    """从 rude.md 加载性格与沟通设定，供 system prompt 注入。"""
-    if not _SOUL_PATH.is_file():
+    """从配置的 soul 文件（如 rude.md）加载性格与沟通设定，供 system prompt 注入。"""
+    path = Config().soul_file_path
+    if not path or not path.is_file():
         return ""
     try:
-        return _SOUL_PATH.read_text(encoding="utf-8").strip()
+        return path.read_text(encoding="utf-8").strip()
     except OSError:
         return ""
 
@@ -50,6 +50,11 @@ _SOUL_EXTRA = _load_soul()
 SYSTEM_PROMPT = _BASE_SYSTEM_PROMPT + (
     "\n\n---\n以下为 rude.md 全文，供风格一致：\n\n" + _SOUL_EXTRA if _SOUL_EXTRA else ""
 )
+
+
+# 带「微信搜索」工具的 ReAct Agent（供 small_chat 使用）
+_WEIXIN_TOOLS_EXECUTOR = ToolExecutor([build_wechat_search_tool()])
+_WEIXIN_REACT_AGENT = ReActAgent(tool_executor=_WEIXIN_TOOLS_EXECUTOR, max_steps=4)
 
 
 def _format_history(history: Sequence[dict]) -> str:
@@ -85,17 +90,36 @@ async def small_chat_reply(
         f"当前这一轮用户说：{message.strip()}\n\n"
         f"请用简短自然的中文回复用户。若有情绪可配合，在最后单独一行写：情绪表情：XXX（从给定的25个中选一，没有则不写）。"
     )
-
-    gateway = LLMGateway()
-    result = await gateway.chat(
-        [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_block},
-        ],
-        temperature=0.4,
-        max_tokens=200,
+    react_question = (
+        "下面是小聊天的任务说明、人格设定以及对话上下文，请严格遵守人格与沟通风格要求：\n\n"
+        f"{SYSTEM_PROMPT}\n\n"
+        f"{user_block}\n\n"
+        "如果需要从微信生态（例如公众号文章等）检索信息辅助回答，请调用 weixin_search[关键词] 或 "
+        "weixin_search[关键词|页码] 工具；如果不需要外部搜索，就直接根据现有信息回答，并使用 Finish[给用户看的最终回复] 结束。"
     )
-    raw = result.text or "我在听，你可以再多说一点，或者告诉我想记录今天的饮食、运动或身体数据。"
+
+    raw: str | None = None
+    try:
+        react_result = await _WEIXIN_REACT_AGENT.run(react_question)
+        if react_result.success and (react_result.final_answer or "").strip():
+            raw = (react_result.final_answer or "").strip()
+    except Exception:
+        raw = None
+
+    if not raw:
+        gateway = LLMGateway()
+        result = await gateway.chat(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_block},
+            ],
+            temperature=0.4,
+            max_tokens=200,
+        )
+        raw = (
+            result.text
+            or "我在听，你可以再多说一点，或者告诉我想记录今天的饮食、运动或身体数据。"
+        )
     reply_text, sticker_id = parse_sticker_from_reply(raw)
     reply_text = reply_text or raw
     return (reply_text.strip(), sticker_id)

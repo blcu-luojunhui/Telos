@@ -2,7 +2,7 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.database.mysql import Goal
+from src.infra.database.mysql import Goal
 from .utils import _get, _parse_date
 
 
