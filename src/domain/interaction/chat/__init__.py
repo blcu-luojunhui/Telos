@@ -8,6 +8,8 @@ from .session import (
     UserSession,
     get_user_session,
     get_or_create_conversation,
+    get_latest_conversation_id,
+    conversation_belongs_to_user,
 )
 
 __all__ = [
@@ -16,4 +18,6 @@ __all__ = [
     "UserSession",
     "get_user_session",
     "get_or_create_conversation",
+    "get_latest_conversation_id",
+    "conversation_belongs_to_user",
 ]

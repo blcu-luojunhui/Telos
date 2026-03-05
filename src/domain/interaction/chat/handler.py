@@ -77,15 +77,19 @@ async def handle_chat_message(
         )
 
     if parsed.intent == IntentType.UNKNOWN:
-        # 未识别到结构化记录意图时，进入小聊天/唤起模式，仅返回自然语言回复
-        reply = await small_chat_reply(user_id=user_id, message=msg, history=history)
-        await session.add_turn("assistant", reply, msg_type="chat_only")
+        # 未识别到结构化记录意图时，进入小聊天/唤起模式，仅返回自然语言回复（可选带表情包）
+        reply, sticker_id = await small_chat_reply(user_id=user_id, message=msg, history=history)
+        await session.add_turn(
+            "assistant", reply, msg_type="chat_only",
+            extra={"sticker_id": sticker_id} if sticker_id is not None else None,
+        )
         return ChatResponse(
             user_id=user_id,
             type="chat_only",
             message=reply,
             conversation_id=conv_id,
             parsed=None,
+            sticker_id=sticker_id,
         )
 
     dr = build_domain_record_and_inject_meal(parsed, user_id, ref, history)

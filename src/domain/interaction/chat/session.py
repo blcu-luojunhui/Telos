@@ -68,6 +68,34 @@ class PendingConfirm:
         return cls(parsed=parsed, duplicate=dup)
 
 
+async def conversation_belongs_to_user(user_id: str, conversation_id: int) -> bool:
+    """校验 conversation_id 是否存在且属于该 user_id（用于拉历史时不做复用）。"""
+    async with async_mysql_pool.session() as session:
+        result = await session.execute(
+            select(Conversation.id).where(
+                Conversation.id == conversation_id,
+                Conversation.user_id == user_id,
+            ).limit(1)
+        )
+        return result.scalars().first() is not None
+
+
+async def get_latest_conversation_id(user_id: str) -> Optional[int]:
+    """返回该用户最近一次 active 会话的 id，没有则返回 None。"""
+    async with async_mysql_pool.session() as session:
+        result = await session.execute(
+            select(Conversation.id)
+            .where(
+                Conversation.user_id == user_id,
+                Conversation.status == "active",
+            )
+            .order_by(desc(Conversation.updated_at))
+            .limit(1)
+        )
+        row = result.scalar_one_or_none()
+        return int(row) if row is not None else None
+
+
 async def get_or_create_conversation(
     user_id: str, conversation_id: Optional[int] = None
 ) -> int | InstrumentedAttribute[int] | Any:
