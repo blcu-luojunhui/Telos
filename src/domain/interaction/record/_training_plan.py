@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, time as dt_time, timedelta
 from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.infra.database.mysql import TrainingPlan, Goal
+from src.infra.database.mysql import TrainingPlan, TrainingPlanSession, Goal
 
 
 def _safe_date(d: Optional[date], fallback: date) -> date:
@@ -179,6 +179,146 @@ def _build_simple_weight_loss_plan(goal: Goal, today: date) -> dict[str, Any]:
     }
 
 
+def _to_preview_sessions(day: dict[str, Any]) -> list[dict[str, Any]]:
+    """将计划中的一天转为前端需要的 sessions 数组（每天 1 条或休息 1 条）。"""
+    slot = day.get("slot") or "rest"
+    summary = day.get("summary") or ""
+    return [
+        {
+            "slot_type": slot,
+            "summary": summary,
+            "scheduled_time": None,
+            "remind_day_before": slot != "rest",
+        }
+    ]
+
+
+def _plan_struct_to_preview(plan_struct: dict[str, Any]) -> dict[str, Any]:
+    """将内部计划结构转为前端表格展示用的预览结构（含 days[].sessions[]）。"""
+    days_in = plan_struct.get("days") or []
+    days_out = []
+    for d in days_in:
+        days_out.append({
+            "date": d.get("date"),
+            "week_index": d.get("week_index"),
+            "day_of_week": d.get("day_of_week"),
+            "sessions": _to_preview_sessions(d),
+        })
+    return {
+        "goal_id": plan_struct.get("goal_id"),
+        "goal_type": plan_struct.get("goal_type"),
+        "title": plan_struct.get("title") or "训练计划",
+        "start_date": plan_struct.get("start_date"),
+        "end_date": plan_struct.get("end_date"),
+        "days": days_out,
+    }
+
+
+def build_plan_preview(
+    goal: Goal,
+    today: Optional[date] = None,
+) -> Optional[dict[str, Any]]:
+    """
+    根据目标生成计划预览（不落库），供前端表格展示。
+    返回结构见文档 4.1：goal_id, title, start_date, end_date, days[].sessions[]。
+    """
+    today = today or date.today()
+    plan_struct: Optional[dict[str, Any]] = None
+    if goal.type == "race":
+        plan_struct = _build_simple_race_plan(goal, today)
+    elif goal.type == "weight_loss":
+        plan_struct = _build_simple_weight_loss_plan(goal, today)
+    if not plan_struct:
+        return None
+    return _plan_struct_to_preview(plan_struct)
+
+
+async def save_plan(
+    session: AsyncSession,
+    user_id: str,
+    goal_id: int,
+    plan_payload: dict[str, Any],
+) -> tuple[TrainingPlan, int]:
+    """
+    用户确认后，将计划写入 training_plans 与 training_plan_sessions。
+    plan_payload 为预览接口返回的结构（含 title, start_date, end_date, days[].sessions[]）。
+    返回 (training_plan, sessions_count)。
+    """
+    title = (plan_payload.get("title") or "训练计划").strip() or "训练计划"
+    start_date_str = plan_payload.get("start_date")
+    end_date_str = plan_payload.get("end_date")
+    start_date = date.today()
+    end_date = start_date
+    if start_date_str:
+        try:
+            start_date = date.fromisoformat(str(start_date_str)[:10])
+        except (ValueError, TypeError):
+            pass
+    if end_date_str:
+        try:
+            end_date = date.fromisoformat(str(end_date_str)[:10])
+        except (ValueError, TypeError):
+            pass
+
+    tp = TrainingPlan(
+        user_id=user_id,
+        goal_id=goal_id,
+        title=title,
+        goal_type=plan_payload.get("goal_type"),
+        start_date=start_date,
+        end_date=end_date,
+        plan=plan_payload,
+        status="active",
+    )
+    session.add(tp)
+    await session.flush()
+
+    days = plan_payload.get("days") or []
+    sessions_count = 0
+    for day_item in days:
+        day_date_str = day_item.get("date")
+        if not day_date_str:
+            continue
+        try:
+            day_date = date.fromisoformat(str(day_date_str)[:10])
+        except (ValueError, TypeError):
+            continue
+        sessions = day_item.get("sessions") or []
+        for order_in_day, sess in enumerate(sessions, start=1):
+            slot_type = (sess.get("slot_type") or "rest").strip() or "rest"
+            summary = (sess.get("summary") or "").strip() or slot_type
+            scheduled_time = None
+            if sess.get("scheduled_time"):
+                t = sess["scheduled_time"]
+                if isinstance(t, str) and ":" in t:
+                    parts = t.replace(":", " ").split()[:3]
+                    if len(parts) >= 2:
+                        try:
+                            scheduled_time = dt_time(int(parts[0]), int(parts[1]), int(parts[2]) if len(parts) > 2 else 0)
+                        except (ValueError, TypeError):
+                            pass
+            remind = sess.get("remind_day_before", True)
+            if not isinstance(remind, bool):
+                remind = bool(remind)
+
+            tps = TrainingPlanSession(
+                user_id=user_id,
+                training_plan_id=tp.id,
+                goal_id=goal_id,
+                scheduled_date=day_date,
+                scheduled_time=scheduled_time,
+                slot_type=slot_type,
+                summary=summary,
+                remind_day_before=remind,
+                status="pending",
+                order_in_day=order_in_day,
+            )
+            session.add(tps)
+            sessions_count += 1
+    await session.flush()
+    return tp, sessions_count
+
+
 async def maybe_create_training_plan_for_goal(
     session: AsyncSession,
     user_id: str,
@@ -202,6 +342,7 @@ async def maybe_create_training_plan_for_goal(
 
     tp = TrainingPlan(
         user_id=user_id,
+        goal_id=goal.id,
         title=plan_struct.get("title") or "训练计划",
         goal_type=plan_struct.get("goal_type") or goal.type,
         start_date=today,

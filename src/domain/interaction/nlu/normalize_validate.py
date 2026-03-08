@@ -19,6 +19,12 @@ from src.domain.interaction.schemas import (
     RecordStatusPayload,
     RecordWorkoutPayload,
     SetGoalPayload,
+    QueryWorkoutPayload,
+    QueryMealPayload,
+    QueryBodyMetricPayload,
+    QuerySummaryPayload,
+    EditLastPayload,
+    DeleteRecordPayload,
 )
 
 
@@ -104,6 +110,20 @@ def _clean_payload(intent: IntentType, payload: Any) -> dict[str, Any]:
         allow = set(SetGoalPayload.model_fields.keys())
     elif intent == IntentType.RECORD_STATUS:
         allow = set(RecordStatusPayload.model_fields.keys())
+    elif intent == IntentType.QUERY_WORKOUT:
+        allow = set(QueryWorkoutPayload.model_fields.keys())
+    elif intent == IntentType.QUERY_MEAL:
+        allow = set(QueryMealPayload.model_fields.keys())
+    elif intent == IntentType.QUERY_BODY_METRIC:
+        allow = set(QueryBodyMetricPayload.model_fields.keys())
+    elif intent == IntentType.QUERY_SUMMARY:
+        allow = set(QuerySummaryPayload.model_fields.keys())
+    elif intent == IntentType.EDIT_LAST:
+        allow = set(EditLastPayload.model_fields.keys())
+    elif intent == IntentType.DELETE_RECORD:
+        allow = set(DeleteRecordPayload.model_fields.keys())
+    elif intent == IntentType.REQUEST_PLAN:
+        allow = {"goal_id"}
     else:
         return {}
 
@@ -178,6 +198,19 @@ def normalize_payload(
         if p.get("weight") is None and hints.get("weight_kg") is not None:
             p["weight"] = hints["weight_kg"]
 
+    # query 类：date_range 归一
+    if intent in (
+        IntentType.QUERY_WORKOUT,
+        IntentType.QUERY_MEAL,
+        IntentType.QUERY_BODY_METRIC,
+        IntentType.QUERY_SUMMARY,
+    ):
+        dr = (p.get("date_range") or "").strip().lower()
+        if dr in ("today", "yesterday", "last_7_days", "last_30_days"):
+            p["date_range"] = dr
+        elif not dr:
+            p["date_range"] = "today"
+
     return p
 
 
@@ -198,8 +231,20 @@ def validate_payload(
             obj = SetGoalPayload.model_validate(payload)
         elif intent == IntentType.RECORD_STATUS:
             obj = RecordStatusPayload.model_validate(payload)
+        elif intent == IntentType.QUERY_WORKOUT:
+            obj = QueryWorkoutPayload.model_validate(payload)
+        elif intent == IntentType.QUERY_MEAL:
+            obj = QueryMealPayload.model_validate(payload)
+        elif intent == IntentType.QUERY_BODY_METRIC:
+            obj = QueryBodyMetricPayload.model_validate(payload)
+        elif intent == IntentType.QUERY_SUMMARY:
+            obj = QuerySummaryPayload.model_validate(payload)
+        elif intent == IntentType.EDIT_LAST:
+            obj = EditLastPayload.model_validate(payload)
+        elif intent == IntentType.DELETE_RECORD:
+            obj = DeleteRecordPayload.model_validate(payload)
         else:
-            return {}, None
+            return payload if payload else {}, None
         return obj.model_dump(exclude_none=True), None
     except ValidationError as e:
         return payload, str(e)

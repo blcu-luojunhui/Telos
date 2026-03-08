@@ -14,6 +14,7 @@ from src.infra.database.mysql import (
     Conversation,
     ChatMessage,
     PendingConfirmation,
+    Soul,
 )
 from src.domain.interaction.duplicate_checker import DuplicateHit
 from src.domain.interaction.schemas import IntentType, ParsedRecord
@@ -76,6 +77,7 @@ class MySQLUserSession:
         content: str,
         msg_type: Optional[str] = None,
         extra: Optional[dict[str, Any]] = None,
+        soul_id: Optional[int] = None,
     ) -> None:
         async with async_mysql_pool.session() as session:
             msg = ChatMessage(
@@ -85,6 +87,7 @@ class MySQLUserSession:
                 content=content,
                 msg_type=msg_type,
                 extra=extra,
+                soul_id=soul_id,
             )
             session.add(msg)
             if self.conversation_id is not None:
@@ -112,12 +115,23 @@ class MySQLUserSession:
             )
             result = await session.execute(stmt)
             rows = result.scalars().all()
+        # 预加载 soul 信息以便返回 slug/name
+        soul_ids = [r.soul_id for r in rows if r.soul_id is not None]
+        soul_map: dict[int, dict] = {}
+        if soul_ids:
+            async with async_mysql_pool.session() as session:
+                stmt = select(Soul).where(Soul.id.in_(soul_ids))
+                res = await session.execute(stmt)
+                for row in res.scalars().all():
+                    soul_map[row.id] = {"id": row.id, "slug": row.slug, "name": row.name}
         return [
             {
                 "role": r.role,
                 "content": r.content,
                 "msg_type": r.msg_type,
                 "extra": r.extra,
+                "soul_id": r.soul_id,
+                "soul": soul_map.get(r.soul_id) if r.soul_id else None,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             }
             for r in reversed(rows)

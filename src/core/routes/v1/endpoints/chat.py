@@ -7,9 +7,26 @@ from datetime import date
 
 from quart import Blueprint, request, jsonify, current_app
 
+from src.core.audit import new_trace_id
+from src.infra.persistence.mysql_soul_repository import (
+    list_souls_from_db,
+    seed_souls_if_empty,
+)
+
 
 def create_chat_bp() -> Blueprint:
     chat_bp = Blueprint("chat", __name__, url_prefix="/v1/api")
+
+    @chat_bp.route("/souls", methods=["GET"])
+    async def souls_list():
+        """
+        返回可选 Agent 人格列表（来自 souls 表），供前端展示为筛选按钮。
+        若表为空会先种子写入默认人格。
+        返回: { "souls": [ { "id", "slug", "name", "description" }, ... ] }
+        """
+        await seed_souls_if_empty()
+        souls = await list_souls_from_db()
+        return jsonify({"souls": souls}), 200
 
     @chat_bp.route("/chat/history", methods=["GET"])
     async def chat_history():
@@ -42,12 +59,17 @@ def create_chat_bp() -> Blueprint:
         for h in history:
             extra = h.get("extra") or {}
             sticker_id = extra.get("sticker_id")
-            messages.append({
+            msg_item = {
                 "role": h["role"],
                 "content": h["content"],
                 "msg_type": h.get("msg_type"),
                 **({"sticker_id": sticker_id} if sticker_id is not None else {}),
-            })
+            }
+            if h.get("soul_id") is not None:
+                msg_item["soul_id"] = h["soul_id"]
+            if h.get("soul"):
+                msg_item["soul"] = h["soul"]
+            messages.append(msg_item)
         return jsonify({"conversation_id": conv_id, "messages": messages}), 200
 
     @chat_bp.route("/chat", methods=["POST"])
@@ -57,7 +79,8 @@ def create_chat_bp() -> Blueprint:
             "user_id": "user_001",           // 必填
             "message": "我中午吃了麻辣烫",
             "date": "2025-02-27",            // 可选，默认当天
-            "conversation_id": 123           // 可选，不传则复用最近会话或新建
+            "conversation_id": 123,          // 可选，不传则复用最近会话或新建
+            "soul_id": "rude"                // 可选，Agent 人格 id（见 GET /souls），不传用默认
         }
 
         返回: {
@@ -97,12 +120,17 @@ def create_chat_bp() -> Blueprint:
             except (TypeError, ValueError):
                 conv_id = None
 
+        soul_id = (data.get("soul_id") or "").strip() or None
+
+        trace_id = request.headers.get("X-Trace-ID") or new_trace_id()
         try:
             resp = await current_app.chat_service.handle_chat_message(
                 user_id=user_id,
                 message=message,
                 reference_date=ref_date,
                 conversation_id=conv_id,
+                trace_id=trace_id,
+                soul_id=soul_id,
             )
             out = {
                 "user_id": resp.user_id,
@@ -115,6 +143,8 @@ def create_chat_bp() -> Blueprint:
             }
             if getattr(resp, "sticker_id", None) is not None:
                 out["sticker_id"] = resp.sticker_id
+            if getattr(resp, "trace_id", None):
+                out["trace_id"] = resp.trace_id
             return jsonify(out), 200
         except Exception as e:
             return jsonify({"error": str(e)}), 500

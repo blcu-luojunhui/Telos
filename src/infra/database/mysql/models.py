@@ -9,10 +9,10 @@ Tables: workouts, body_metrics, meals, user_profile, goals, conversations, chat_
         result = await session.execute(select(Workout).where(Workout.date >= ...))
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text, JSON
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text, JSON, Time, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -197,24 +197,92 @@ class Goal(Base):
 
 
 class TrainingPlan(Base):
-    """训练计划：按天/阶段安排训练内容，存为 JSON 结构，后续可用于提醒与调整。"""
+    """训练计划：按天/阶段安排训练内容，关联目标；计划内单次训练见 TrainingPlanSession。"""
 
     __tablename__ = "training_plans"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    goal_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("goals.id", ondelete="CASCADE"), nullable=True, index=True
+    )  # 关联目标，新计划必填
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     goal_type: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, index=True
     )  # 如 half_marathon / 10k / weight_loss
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
-    plan: Mapped[dict] = mapped_column(
-        JSON, nullable=False
-    )  # 完整计划结构（按天/阶段拆分）
+    plan: Mapped[Optional[dict]] = mapped_column(
+        JSON, nullable=True
+    )  # 可选摘要/快照；按次计划以 training_plan_sessions 为准
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="active", index=True
     )  # active / archived / completed
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+# ---------------------------------------------------------------------------
+# 计划内单次训练 training_plan_sessions（每次训练一条记录）
+# ---------------------------------------------------------------------------
+
+
+class TrainingPlanSession(Base):
+    """计划内单次训练：每一条对应某天的一场训练，可关联实际执行 workout。"""
+
+    __tablename__ = "training_plan_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    training_plan_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("training_plans.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    goal_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("goals.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    scheduled_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    scheduled_time: Mapped[Optional[time]] = mapped_column(Time, nullable=True)
+    slot_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    remind_day_before: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1"
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", index=True
+    )  # pending / completed / skipped / rescheduled
+    workout_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("workouts.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    order_in_day: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+# ---------------------------------------------------------------------------
+# Agent 人格 souls（每种人格一条，供小聊天注入；chat_messages 记录回复来自哪个人格）
+# ---------------------------------------------------------------------------
+
+
+class Soul(Base):
+    """Agent 人格：名称、描述、人格文档内容（Markdown），供小聊天 system prompt 注入。"""
+
+    __tablename__ = "souls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    slug: Mapped[str] = mapped_column(
+        String(32), nullable=False, unique=True, index=True
+    )  # rude / gentle / professional / funny
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 人格文档正文（Markdown）
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active", server_default="active", index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -249,7 +317,7 @@ class Conversation(Base):
 
 
 class ChatMessage(Base):
-    """对话消息记录：归属某会话，用于上下文感知。"""
+    """对话消息记录：归属某会话，用于上下文感知；assistant 消息可记录来自哪个人格。"""
 
     __tablename__ = "chat_messages"
 
@@ -269,6 +337,12 @@ class ChatMessage(Base):
         String(32), nullable=True
     )  # normal / saved / needs_confirm / confirmed / cancelled / error / unknown
     extra: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 扩展：saved 结果等；pending 已迁至 pending_confirmations
+    soul_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("souls.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )  # 仅 assistant 消息：回复来自哪个人格
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
