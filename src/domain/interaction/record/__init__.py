@@ -3,15 +3,14 @@
 from datetime import date
 from typing import Any
 
-from src.core.database.mysql import async_mysql_pool
+from src.infra.database.mysql import async_mysql_pool
 from src.domain.interaction.schemas import IntentType, ParsedRecord
 
-from ._body_metric import insert_body_metric
-from ._body_metric import insert_status
-from ._goal import insert_goal
-from ._training_plan import maybe_create_training_plan_for_goal
-from ._meal import insert_meal
-from ._workout import insert_workout
+from .body_metric import insert_body_metric
+from .body_metric import insert_status
+from .goal import insert_goal
+from .meal import insert_meal
+from .workout import insert_workout
 
 
 async def apply_parsed_record(parsed: ParsedRecord) -> dict[str, Any]:
@@ -77,8 +76,6 @@ async def apply_parsed_record(parsed: ParsedRecord) -> dict[str, Any]:
 
             if parsed.intent == IntentType.SET_GOAL:
                 row = await insert_goal(session, uid, payload)
-                # 为部分目标（如 race / weight_loss）自动生成基础训练计划
-                await maybe_create_training_plan_for_goal(session, uid, row, d)
                 await session.commit()
                 return {
                     "ok": True,

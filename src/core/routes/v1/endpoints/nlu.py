@@ -31,14 +31,25 @@ def create_nlu_bp() -> Blueprint:
                 pass
 
         try:
-            # 独立 NLU 接口默认不带多轮上下文；如需，可以后续扩展传入 history
-            parsed = await parse_user_message(message, reference_date=ref_date)
+            # 独立 NLU 接口默认不带多轮上下文；支持一句话多意图，返回列表
+            parsed_list = await parse_user_message(message, reference_date=ref_date)
+            if not parsed_list:
+                return jsonify({"intents": [], "intent": "unknown", "date": None, "payload": {}, "raw_message": message}), 200
+            primary = parsed_list[0]
             return jsonify(
                 {
-                    "intent": parsed.intent.value,
-                    "date": parsed.date.isoformat() if parsed.date else None,
-                    "payload": parsed.payload,
-                    "raw_message": parsed.raw_message,
+                    "intent": primary.intent.value,
+                    "date": primary.date.isoformat() if primary.date else None,
+                    "payload": primary.payload,
+                    "raw_message": primary.raw_message,
+                    "intents": [
+                        {
+                            "intent": p.intent.value,
+                            "date": p.date.isoformat() if p.date else None,
+                            "payload": p.payload,
+                        }
+                        for p in parsed_list
+                    ],
                 }
             ), 200
         except Exception as e:

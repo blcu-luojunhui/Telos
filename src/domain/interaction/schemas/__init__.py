@@ -5,6 +5,13 @@ from .record_meal_payload import RecordMealPayload
 from .record_status_record import RecordStatusPayload
 from .record_workout_payload import RecordWorkoutPayload
 from .set_goal_payload import SetGoalPayload
+from .query_payloads import (
+    QueryWorkoutPayload,
+    QueryMealPayload,
+    QueryBodyMetricPayload,
+    QuerySummaryPayload,
+)
+from .edit_delete_payloads import EditLastPayload, DeleteRecordPayload
 
 
 __all__ = [
@@ -15,4 +22,10 @@ __all__ = [
     "RecordMealPayload",
     "RecordBodyMetricPayload",
     "SetGoalPayload",
+    "QueryWorkoutPayload",
+    "QueryMealPayload",
+    "QueryBodyMetricPayload",
+    "QuerySummaryPayload",
+    "EditLastPayload",
+    "DeleteRecordPayload",
 ]
