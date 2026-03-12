@@ -103,32 +103,6 @@ class ISessionStore(Protocol):
         ...
 
 
-class ISmallChatRunner(Protocol):
-    """小聊天/唤起端口：未识别记录意图时生成自然语言回复。"""
-
-    async def run(
-        self,
-        user_id: str,
-        message: str,
-        history: Sequence[dict],
-        soul_id: Optional[str] = None,
-    ) -> tuple[str, Optional[int]]:
-        """返回 (回复正文, sticker_id 或 None)。soul_id 为可选人格 id，见 soul 注册表。"""
-        ...
-
-
-class INLUParser(Protocol):
-    """NLU 解析端口：用户消息 → 意图与结构化 payload，支持一句话多意图。"""
-
-    async def parse(
-        self,
-        message: str,
-        reference_date: Optional[date] = None,
-        history: Optional[Sequence[dict]] = None,
-    ) -> list[ParsedRecord]:
-        ...
-
-
 class IQueryRunner(Protocol):
     """查询端口：按意图与 payload 查库，返回结构化结果供生成自然语言回复。"""
 
@@ -176,8 +150,6 @@ __all__ = [
     "IDuplicateChecker",
     "IUserSession",
     "ISessionStore",
-    "ISmallChatRunner",
-    "INLUParser",
     "IQueryRunner",
     "IEditDeleteRunner",
 ]

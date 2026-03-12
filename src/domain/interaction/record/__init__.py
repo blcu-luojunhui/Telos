@@ -6,11 +6,11 @@ from typing import Any
 from src.infra.database.mysql import async_mysql_pool
 from src.domain.interaction.schemas import IntentType, ParsedRecord
 
-from ._body_metric import insert_body_metric
-from ._body_metric import insert_status
-from ._goal import insert_goal
-from ._meal import insert_meal
-from ._workout import insert_workout
+from .body_metric import insert_body_metric
+from .body_metric import insert_status
+from .goal import insert_goal
+from .meal import insert_meal
+from .workout import insert_workout
 
 
 async def apply_parsed_record(parsed: ParsedRecord) -> dict[str, Any]:

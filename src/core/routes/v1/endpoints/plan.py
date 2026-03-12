@@ -8,7 +8,7 @@ from quart import Blueprint, request, jsonify
 from sqlalchemy import select
 
 from src.infra.database.mysql import async_mysql_pool, Goal
-from src.domain.interaction.record._training_plan import build_plan_preview, save_plan
+from src.domain.interaction.record.training_plan import build_plan_preview, save_plan
 
 
 def create_plan_bp() -> Blueprint:

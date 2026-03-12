@@ -76,11 +76,12 @@ def format_plan_preview_message(plan_preview: dict, max_days: int = 14) -> str:
                 st = (s.get("slot_type") or "").strip() or "训练"
                 parts.append(slot_type_cn(st))
             lines.append("  ".join(parts))
-            summary = (sessions[0].get("summary") or "").strip()
-            if summary and len(summary) <= 80:
-                lines.append(f"    → {summary}")
-            elif summary:
-                lines.append(f"    → {summary[:78]}…")
+            for s in sessions:
+                summary = (s.get("summary") or "").strip()
+                if summary and len(summary) <= 80:
+                    lines.append(f"    → {summary}")
+                elif summary:
+                    lines.append(f"    → {summary[:78]}…")
     if len(days) > max_days:
         lines.append(f"  … 后续 {len(days) - max_days} 天详见完整计划。")
     lines.append("")
@@ -105,9 +106,11 @@ def format_query_reply(
                 if "food_items" in item:
                     lines.append(f"· {item.get('meal_type', '')} {item.get('food_items', '')}")
                 elif "type" in item and "distance_km" in item:
+                    dur = item.get('duration_min')
+                    dur_str = f" {dur}分钟" if dur is not None else ""
                     lines.append(
                         f"· {item.get('date', '')} {workout_type_cn(item.get('type', ''))} "
-                        f"{item.get('distance_km')}km {item.get('duration_min', '') or ''}分钟"
+                        f"{item.get('distance_km')}km{dur_str}"
                     )
                 elif "weight" in item or "sleep_hours" in item:
                     parts = [item.get("date", "")]
