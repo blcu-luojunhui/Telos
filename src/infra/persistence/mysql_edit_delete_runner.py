@@ -15,6 +15,7 @@ from src.infra.database.mysql import (
     Meal,
     BodyMetric,
     Goal,
+    TrainingPlan,
 )
 async def _find_latest_workout(session, user_id: str) -> Optional[Any]:
     result = await session.execute(
@@ -51,6 +52,16 @@ async def _find_latest_goal(session, user_id: str) -> Optional[Any]:
         select(Goal)
         .where(Goal.user_id == user_id, Goal.status.in_(["planning", "ongoing"]))
         .order_by(Goal.id.desc())
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
+async def _find_latest_training_plan(session, user_id: str) -> Optional[Any]:
+    result = await session.execute(
+        select(TrainingPlan)
+        .where(TrainingPlan.user_id == user_id, TrainingPlan.status == "active")
+        .order_by(TrainingPlan.id.desc())
         .limit(1)
     )
     return result.scalars().first()
@@ -136,6 +147,8 @@ class MySQLEditDeleteRunner:
             "meal": Meal,
             "body_metric": BodyMetric,
             "goal": Goal,
+            "training_plan": TrainingPlan,
+            "plan": TrainingPlan,
         }
         model = model_map.get(record_type.lower())
         if not model:
@@ -186,13 +199,20 @@ class MySQLEditDeleteRunner:
                     row = await _find_latest_body_metric(session, user_id)
                 elif model == Goal:
                     row = await _find_latest_goal(session, user_id)
+                elif model == TrainingPlan:
+                    row = await _find_latest_training_plan(session, user_id)
                 else:
                     row = None
 
             if not row:
                 return {"ok": False, "id": None, "error": "没有找到要删除的记录"}
 
-            status_value = "abandoned" if model == Goal else "deleted"
+            if model == Goal:
+                status_value = "abandoned"
+            elif model == TrainingPlan:
+                status_value = "archived"
+            else:
+                status_value = "deleted"
             await session.execute(
                 update(model).where(model.id == row.id).values(status=status_value)
             )

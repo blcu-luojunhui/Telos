@@ -4,6 +4,8 @@ from src.core.routes.v1.endpoints import (
     create_nlu_bp,
     create_plan_bp,
     create_record_bp,
+    create_monitor_bp,
+    create_auth_bp,
 )
 from src.core.routes.v1.websocket import ws_bp
 
@@ -14,6 +16,8 @@ def register_routes(app):
     app.register_blueprint(create_record_bp())
     app.register_blueprint(create_plan_bp())
     app.register_blueprint(create_chat_bp())
+    app.register_blueprint(create_monitor_bp())
+    app.register_blueprint(create_auth_bp())
     app.register_blueprint(ws_bp)
 
 

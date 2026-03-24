@@ -23,9 +23,10 @@ class DeleteRecordPayload(BaseModel):
     """删除某条记录。"""
 
     record_type: Optional[str] = Field(
-        None, description="workout | meal | body_metric | goal，可由上下文推断"
+        None, description="workout | meal | body_metric | goal | training_plan，可由上下文推断"
     )
     record_id: Optional[int] = Field(None, description="若已知 ID 直接删")
+    plan_id: Optional[int] = Field(None, description="计划 ID（等价 record_id，兼容口语“计划id=2”）")
     # 或按日期+槽位定位（如 meal: date + meal_type）
     date: Optional[date] = None
     meal_type: Optional[str] = None  # 仅 record_type=meal 时

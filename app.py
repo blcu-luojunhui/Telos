@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 
 def create_app() -> Quart:
     _app = Quart(__name__)
-    _app.config.from_object(Config)
+    cfg = Config()
+    # 显式注入配置，避免 from_object 在 BaseSettings 下漏加载字段。
+    _app.config.from_mapping(cfg.model_dump())
 
     @_app.before_serving
     async def startup():

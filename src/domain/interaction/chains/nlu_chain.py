@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
-from typing import List, Optional, Sequence
+from typing import Any, List, Optional, Sequence
 
 from src.domain.interaction.schemas import IntentType, ParsedRecord
 from src.domain.interaction.nlu.preprocess import preprocess_message
@@ -20,6 +20,7 @@ from src.domain.interaction.nlu.normalize_validate import (
     normalize_payload,
     validate_payload,
 )
+from ..callbacks import InteractionCallbackHandler
 from ..llm import get_chat_model
 from ..prompts.nlu import nlu_prompt
 from ..prompts.repair import repair_prompt
@@ -51,6 +52,8 @@ async def parse_user_message(
     message: str,
     reference_date: Optional[date] = None,
     history: Optional[Sequence[dict]] = None,
+    trace_id: Optional[str] = None,
+    metrics: Optional[dict[str, Any]] = None,
 ) -> List[ParsedRecord]:
     """
     将用户自然语言解析为结构化记录，支持一句话多意图。
@@ -74,9 +77,14 @@ async def parse_user_message(
         "normalized_text": pre.normalized_text,
     }
 
+    cb = InteractionCallbackHandler(trace_id=trace_id or "nlu_parse")
     nlu_chain = nlu_prompt | get_chat_model(temperature=0.1)
-    result = await nlu_chain.ainvoke(chain_input)
+    result = await nlu_chain.ainvoke(chain_input, config={"callbacks": [cb]})
     text = result.content or "{}"
+
+    if metrics is not None:
+        # 记录 NLU 主链的 token 与费用信息
+        metrics["nlu"] = cb.summary()
 
     parser = NLUOutputParser(
         reference_date=ref,
@@ -116,9 +124,14 @@ async def parse_user_message(
         "validation_error": err,
     }
 
+    repair_cb = InteractionCallbackHandler(trace_id=trace_id or "nlu_repair")
     repair = repair_prompt | get_chat_model(temperature=0.0)
-    repair_result = await repair.ainvoke(repair_input)
+    repair_result = await repair.ainvoke(repair_input, config={"callbacks": [repair_cb]})
     repair_text = repair_result.content or "{}"
+
+    if metrics is not None:
+        # 记录 repair 链的 token 与费用信息
+        metrics["nlu_repair"] = repair_cb.summary()
 
     repair_parser = NLUOutputParser(
         reference_date=ref,

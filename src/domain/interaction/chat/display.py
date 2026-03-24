@@ -57,33 +57,40 @@ def format_plan_preview_message(plan_preview: dict, max_days: int = 14) -> str:
     start = (plan_preview.get("start_date") or "").strip()
     end = (plan_preview.get("end_date") or "").strip()
     days = plan_preview.get("days") or []
-    lines = [f"【{title}】", f"周期：{start} 至 {end}"]
+    lines = [f"已记录：目标 【{title}】", f"周期：{start} 至 {end}"]
     if not days:
         return "\n".join(lines)
     total_sessions = sum(len(d.get("sessions") or []) for d in days)
     lines.append(f"共 {len(days)} 天、{total_sessions} 次训练安排。")
     lines.append("")
-    # 近期（最多 max_days 天）逐日摘要
-    for i, day in enumerate(days[:max_days]):
-        date_str = day.get("date") or ""
+    lines.append("近期安排（预览）：")
+    lines.append("| 日期 | 周次 | 类型 | 安排 |")
+    lines.append("|---|---|---|---|")
+
+    # 近期（最多 max_days 天）转成 Markdown 表格，便于前端优雅展示
+    for day in days[:max_days]:
+        date_str = (day.get("date") or "").strip()
         week_idx = day.get("week_index")
+        week_text = f"第{week_idx}周" if week_idx else "-"
         sessions = day.get("sessions") or []
         if not sessions:
-            lines.append(f"  {date_str}  第{week_idx}周  休息")
-        else:
-            parts = [f"  {date_str}  第{week_idx}周"]
-            for s in sessions:
-                st = (s.get("slot_type") or "").strip() or "训练"
-                parts.append(slot_type_cn(st))
-            lines.append("  ".join(parts))
-            for s in sessions:
-                summary = (s.get("summary") or "").strip()
-                if summary and len(summary) <= 80:
-                    lines.append(f"    → {summary}")
-                elif summary:
-                    lines.append(f"    → {summary[:78]}…")
+            lines.append(f"| {date_str} | {week_text} | 休息 | 主动休息 |")
+            continue
+
+        for s in sessions:
+            st = (s.get("slot_type") or "").strip() or "训练"
+            st_cn = slot_type_cn(st)
+            summary = (s.get("summary") or "").strip()
+            if not summary:
+                summary = "-"
+            if len(summary) > 72:
+                summary = f"{summary[:70]}…"
+            # 避免破坏 Markdown 表格
+            summary = summary.replace("|", "｜")
+            lines.append(f"| {date_str} | {week_text} | {st_cn} | {summary} |")
     if len(days) > max_days:
-        lines.append(f"  … 后续 {len(days) - max_days} 天详见完整计划。")
+        lines.append("")
+        lines.append(f"… 后续 {len(days) - max_days} 天详见完整计划。")
     lines.append("")
     lines.append("确认后请点击「确认计划」保存；保存后训练日前一天会提醒你。")
     return "\n".join(lines)
@@ -114,9 +121,9 @@ def format_query_reply(
                     )
                 elif "weight" in item or "sleep_hours" in item:
                     parts = [item.get("date", "")]
-                    if item.get("weight"):
+                    if item.get("weight") is not None:
                         parts.append(f"体重{item['weight']}kg")
-                    if item.get("sleep_hours"):
+                    if item.get("sleep_hours") is not None:
                         parts.append(f"睡眠{item['sleep_hours']}h")
                     lines.append(" · ".join(parts))
                 else:
@@ -139,14 +146,14 @@ def payload_summary(intent: IntentType, payload: dict) -> str:
     elif intent == IntentType.RECORD_WORKOUT:
         if payload.get("type"):
             parts.append(workout_type_cn(payload["type"]))
-        if payload.get("duration_min"):
+        if payload.get("duration_min") is not None:
             parts.append(f"{payload['duration_min']}分钟")
-        if payload.get("distance_km"):
+        if payload.get("distance_km") is not None:
             parts.append(f"{payload['distance_km']}km")
     elif intent == IntentType.RECORD_BODY_METRIC:
-        if payload.get("weight"):
+        if payload.get("weight") is not None:
             parts.append(f"体重{payload['weight']}kg")
-        if payload.get("sleep_hours"):
+        if payload.get("sleep_hours") is not None:
             parts.append(f"睡眠{payload['sleep_hours']}h")
     elif intent == IntentType.SET_GOAL:
         if payload.get("type"):

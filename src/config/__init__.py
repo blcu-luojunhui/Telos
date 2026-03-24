@@ -39,6 +39,20 @@ class Config(BaseSettings):
     # ============ 数据库配置 ============
     better_me: BetterMeMySQLConfig = Field(default_factory=BetterMeMySQLConfig)
 
+    # ============ Auth / JWT 配置 ============
+    JWT_SECRET: str = Field(
+        default="change-me-in-prod",
+        description="JWT 签名密钥，生产环境必须通过环境变量 JWT_SECRET 覆盖",
+    )
+    JWT_ALGORITHM: str = Field(
+        default="HS256",
+        description="JWT 签名算法",
+    )
+    JWT_EXPIRE_SECONDS: int = Field(
+        default=7 * 24 * 3600,
+        description="JWT 过期时间（秒），默认 7 天",
+    )
+
     # ============ LLM（交互层 NLU）：供应商 + 各供应商配置 ============
     llm_provider: LLMProviderType = Field(
         default="deepseek",

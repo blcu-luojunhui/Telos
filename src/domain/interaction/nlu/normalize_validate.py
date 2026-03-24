@@ -211,6 +211,17 @@ def normalize_payload(
         elif not dr:
             p["date_range"] = "today"
 
+    if intent == IntentType.DELETE_RECORD:
+        # 兼容 plan_id -> record_id
+        if p.get("record_id") is None and p.get("plan_id") is not None:
+            p["record_id"] = _to_number(p.get("plan_id"))
+        if p.get("record_id") is not None:
+            p["record_id"] = _to_number(p.get("record_id"))
+        # 统一 record_type 别名
+        rt = (p.get("record_type") or "").strip().lower()
+        if rt in {"plan", "training_plan", "training-plans", "training_plans"}:
+            p["record_type"] = "training_plan"
+
     return p
 
 

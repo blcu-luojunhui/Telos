@@ -1,5 +1,6 @@
 from .base import Base, AsyncMySQL
 from .models import (
+    AuthUser,
     Workout,
     BodyMetric,
     Meal,
@@ -11,6 +12,13 @@ from .models import (
     Conversation,
     ChatMessage,
     PendingConfirmation,
+    AgentActionEvent,
+    AgentStepMemory,
+    AgentEpisode,
+    AgentCognitionTool,
+    AgentSkill,
+    AgentCognitionPeer,
+    AgentCognitionPatch,
 )
 
 # 异步 Mysql POOL
@@ -21,6 +29,7 @@ __all__ = [
     "Base",
     "AsyncMySQL",
     "Workout",
+    "AuthUser",
     "BodyMetric",
     "Meal",
     "UserProfile",
@@ -31,4 +40,11 @@ __all__ = [
     "Conversation",
     "ChatMessage",
     "PendingConfirmation",
+    "AgentActionEvent",
+    "AgentStepMemory",
+    "AgentEpisode",
+    "AgentCognitionTool",
+    "AgentSkill",
+    "AgentCognitionPeer",
+    "AgentCognitionPatch",
 ]
