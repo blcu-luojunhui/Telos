@@ -34,6 +34,7 @@ from src.domain.interaction.chat.slot_fill import (
     missing_slots,
     slot_fill_question,
     merge_slot_from_message,
+    merge_from_nlu_result,
 )
 from src.domain.interaction.chat.response import ChatResponse
 from src.domain.interaction.nlu import parse_user_message
@@ -74,6 +75,26 @@ def _is_cancel(msg: str) -> bool:
 def _is_add_new(msg: str) -> bool:
     t = msg.strip()
     return "再记一条" in t or ("保留" in t and "新增" in t) or "不覆盖" in t and "新" in t
+
+
+def _table_to_entity(table: str | None) -> str | None:
+    """兼容旧 table 字段，同时补充 V2 entity 字段。"""
+    m = {
+        "records/activity_records": "record.activity",
+        "records/nutrition_records": "record.nutrition",
+        "records/measurement_records": "record.measurement",
+        "records/status_records": "record.status",
+        "user_goals": "goal",
+        "plans": "plan",
+        "_slot_fill": "pending.slot_fill",
+        "_plan_confirm": "pending.confirm_plan",
+        "_confirm_delete": "pending.confirm_delete",
+        "_confirm_save": "pending.confirm_save",
+        "records": "record",
+    }
+    if not table:
+        return None
+    return m.get(table, table.replace("/", "."))
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +164,7 @@ class ChatApplicationService:
                 history=history,
                 reference_date=ref,
                 soul_id=soul_id,
+                trace_id=tid,
             )
         except Exception as e:
             log_chat_step(tid, user_id, "nlu", error=str(e))
@@ -231,7 +253,10 @@ class ChatApplicationService:
                 payload=extra.get("query_payload") or {},
                 reference_date=ref,
             )
-            intent_enum = IntentType(extra.get("query_intent", "unknown"))
+            try:
+                intent_enum = IntentType(extra.get("query_intent", "unknown"))
+            except ValueError:
+                intent_enum = IntentType.UNKNOWN
             reply = format_query_reply(intent_enum, q_result)
             log_chat_step(trace_id, user_id, "query",
                           intent=extra.get("query_intent"), result=q_result.get("summary"))
@@ -241,11 +266,46 @@ class ChatApplicationService:
                 conversation_id=conv_id, parsed=nlp_result.parsed, trace_id=trace_id,
             )
 
-        # 计划预览
+        # 计划预览 → 设 pending 等待用户确认保存
         if rtype == "plan_preview":
+            plan_mode = ((nlp_result.extra or {}).get("plan_mode") or "build").strip().lower()
+            if plan_mode == "view":
+                view_reply, view_extra = await self._reply_existing_plan(user_id)
+                await session.add_turn(
+                    "assistant",
+                    view_reply,
+                    msg_type="plan_view",
+                    extra=view_extra,
+                    soul_id=soul_id_int,
+                )
+                return ChatResponse(
+                    user_id=user_id,
+                    type="plan_view",
+                    message=view_reply,
+                    conversation_id=conv_id,
+                    parsed=nlp_result.parsed,
+                    extra=view_extra,
+                    trace_id=trace_id,
+                )
+
             plan_reply, plan_extra = await self._reply_plan_preview(
                 user_id, (nlp_result.extra or {}), ref,
             )
+            if plan_extra.get("plan_preview"):
+                plan_dup = DuplicateHit(
+                    existing_id=0, table="_plan_confirm", same_content=False,
+                    summary=json.dumps({
+                        "plan_preview": plan_extra["plan_preview"],
+                        "goal_id": plan_extra["plan_preview"].get("goal_id"),
+                    }),
+                )
+                dummy_parsed = ParsedRecord(
+                    intent=IntentType.REQUEST_PLAN, date=ref,
+                    payload=plan_extra.get("plan_preview") or {},
+                    raw_message="", user_id=user_id,
+                )
+                await session.set_pending(PendingConfirm(parsed=dummy_parsed, duplicate=plan_dup))
+                plan_reply += "\n\n回复「确认」保存此计划，回复「取消」放弃。"
             await session.add_turn("assistant", plan_reply, msg_type="plan_preview",
                                    extra=plan_extra, soul_id=soul_id_int)
             return ChatResponse(
@@ -276,31 +336,45 @@ class ChatApplicationService:
 
         # 删除
         if rtype == "delete":
-            extra = nlp_result.extra or {}
             parsed = self._rebuild_parsed(nlp_result)
-            date_val = parsed.date or ref
             payload = parsed.payload or {}
-            if isinstance(payload.get("date"), str):
-                try:
-                    date_val = date.fromisoformat(payload["date"][:10])
-                except Exception:
-                    pass
-            del_result = await self._edit_delete_runner.delete_record(
-                user_id=user_id,
-                record_type=extra.get("record_type") or "",
-                record_id=extra.get("record_id"),
-                date_arg=date_val,
-                meal_type=payload.get("meal_type"),
-                workout_type=payload.get("workout_type"),
+            record_type = ((nlp_result.extra or {}).get("record_type") or payload.get("record_type") or "").strip().lower()
+            record_id = (nlp_result.extra or {}).get("record_id") or payload.get("record_id") or payload.get("plan_id")
+            if record_type in ("plan", "training-plans", "training_plans"):
+                record_type = "training_plan"
+            if not record_type:
+                if record_id:
+                    record_type = "training_plan"
+            if not record_type:
+                reply = (
+                    "我可以帮你删除记录，但还不确定要删哪一类。\n"
+                    "请补充：workout / meal / body_metric / goal / training_plan，"
+                    "或直接说「删除计划 id=2」。"
+                )
+                await session.add_turn("assistant", reply, msg_type="need_delete_target", soul_id=soul_id_int)
+                return ChatResponse(
+                    user_id=user_id, type="need_delete_target", message=reply,
+                    conversation_id=conv_id, parsed=nlp_result.parsed, trace_id=trace_id,
+                )
+            del_dup = DuplicateHit(
+                existing_id=0, table="_confirm_delete", same_content=False,
+                summary=json.dumps({
+                    "record_type": record_type,
+                    "record_id": record_id,
+                    "date": str(payload.get("date") or ""),
+                    "meal_type": payload.get("meal_type"),
+                    "workout_type": payload.get("workout_type"),
+                }),
             )
-            reply = (f"已删除记录（id={del_result.get('id')}）。"
-                     if del_result.get("ok")
-                     else f"删除失败：{del_result.get('error', '未知错误')}")
-            log_chat_step(trace_id, user_id, "delete_record",
-                          result="ok" if del_result.get("ok") else del_result.get("error"))
-            await session.add_turn("assistant", reply, msg_type="delete_record", soul_id=soul_id_int)
+            await session.set_pending(PendingConfirm(parsed=parsed, duplicate=del_dup))
+            target = f"{record_type}（id={record_id}）" if record_id else record_type
+            reply = (
+                f"收到，你要删除的是：{target}。\n"
+                "回复「确认」执行删除，回复「取消」放弃。"
+            )
+            await session.add_turn("assistant", reply, msg_type="confirm_delete", soul_id=soul_id_int)
             return ChatResponse(
-                user_id=user_id, type="delete_record", message=reply,
+                user_id=user_id, type="confirm_delete", message=reply,
                 conversation_id=conv_id, parsed=nlp_result.parsed, trace_id=trace_id,
             )
 
@@ -339,7 +413,12 @@ class ChatApplicationService:
                 return ChatResponse(
                     user_id=user_id, type="duplicate_same", message=reply,
                     conversation_id=conv_id, parsed=parsed_dict(parsed),
-                    conflict={"existing_id": dup.existing_id, "table": dup.table, "summary": dup.summary},
+                    conflict={
+                        "existing_id": dup.existing_id,
+                        "entity": _table_to_entity(dup.table),
+                        "table": dup.table,  # legacy compatibility
+                        "summary": dup.summary,
+                    },
                     trace_id=trace_id,
                 )
             pending = PendingConfirm(parsed=parsed, duplicate=dup)
@@ -357,7 +436,12 @@ class ChatApplicationService:
             return ChatResponse(
                 user_id=user_id, type="needs_confirm", message=reply,
                 conversation_id=conv_id, parsed=parsed_dict(parsed),
-                conflict={"existing_id": dup.existing_id, "table": dup.table, "summary": dup.summary},
+                conflict={
+                    "existing_id": dup.existing_id,
+                    "entity": _table_to_entity(dup.table),
+                    "table": dup.table,  # legacy compatibility
+                    "summary": dup.summary,
+                },
                 trace_id=trace_id,
             )
 
@@ -409,12 +493,24 @@ class ChatApplicationService:
         if getattr(pending.duplicate, "table", None) == "_slot_fill":
             return await self._handle_slot_fill(
                 session, pending, msg, conversation_id, ref,
-                trace_id=tid, soul_id_int=soul_id_int,
+                trace_id=tid, soul_id=soul_id, soul_id_int=soul_id_int,
+            )
+
+        # 计划确认保存
+        if getattr(pending.duplicate, "table", None) == "_plan_confirm":
+            return await self._handle_plan_confirm(
+                session, pending, msg, conversation_id, ref,
+                trace_id=tid, soul_id=soul_id, soul_id_int=soul_id_int,
             )
 
         # 先确认再存
         if getattr(pending.duplicate, "table", None) == "_confirm_save":
             return await self._handle_confirm_save(
+                session, pending, msg, conversation_id, ref,
+                trace_id=tid, soul_id=soul_id, soul_id_int=soul_id_int,
+            )
+        if getattr(pending.duplicate, "table", None) == "_confirm_delete":
+            return await self._handle_confirm_delete(
                 session, pending, msg, conversation_id, ref,
                 trace_id=tid, soul_id=soul_id, soul_id_int=soul_id_int,
             )
@@ -448,6 +544,7 @@ class ChatApplicationService:
                 msg,
                 reference_date=pending.parsed.date,
                 history=await session.get_recent_history(),
+                trace_id=tid,
             )
             edit_parsed = edit_list[0] if edit_list else None
             if (edit_parsed
@@ -467,7 +564,8 @@ class ChatApplicationService:
                     conversation_id=conversation_id, parsed=parsed_dict(pending.parsed),
                     conflict={
                         "existing_id": pending.duplicate.existing_id,
-                        "table": pending.duplicate.table,
+                        "entity": _table_to_entity(pending.duplicate.table),
+                        "table": pending.duplicate.table,  # legacy compatibility
                         "summary": pending.duplicate.summary,
                     },
                     trace_id=tid,
@@ -494,18 +592,38 @@ class ChatApplicationService:
         conversation_id: int,
         ref: date,
         trace_id: str = "",
+        soul_id: str | None = None,
         soul_id_int: int | None = None,
     ) -> ChatResponse:
-        try:
-            meta = json.loads(pending.duplicate.summary or "{}")
-            missing = meta.get("missing") or []
-        except Exception:
-            missing = []
+        # 允许用户在 slot fill 过程中取消
+        if _is_cancel(msg):
+            await session.clear_pending()
+            reply = "好的，已取消记录。"
+            await session.add_turn("assistant", reply, msg_type="cancelled", soul_id=soul_id_int)
+            return ChatResponse(
+                user_id=session.user_id, type="cancelled", message=reply,
+                conversation_id=conversation_id, trace_id=trace_id,
+            )
+
         merged = merge_slot_from_message(
             pending.parsed.intent, pending.parsed.payload or {}, msg, ref,
         )
-        pending.parsed.payload = merged
         still_missing = missing_slots(pending.parsed.intent, merged)
+
+        # 简单合并仍缺字段时，尝试 NLU 重解析用户回复
+        if still_missing:
+            try:
+                nlu_results = await parse_user_message(msg, reference_date=ref)
+                if nlu_results:
+                    nlu_payload = nlu_results[0].payload
+                    merged = merge_from_nlu_result(
+                        pending.parsed.intent, merged, nlu_payload,
+                    )
+                    still_missing = missing_slots(pending.parsed.intent, merged)
+            except Exception:
+                pass
+
+        pending.parsed.payload = merged
 
         if still_missing:
             new_dup = DuplicateHit(
@@ -561,9 +679,33 @@ class ChatApplicationService:
                             session.user_id, {"goal_id": goal_id}, ref,
                         )
                         if plan_extra.get("plan_preview"):
-                            combined = (resp.message or "") + "\n\n" + plan_reply
+                            plan_dup = DuplicateHit(
+                                existing_id=0,
+                                table="_plan_confirm",
+                                same_content=False,
+                                summary=json.dumps({
+                                    "plan_preview": plan_extra["plan_preview"],
+                                    "goal_id": plan_extra["plan_preview"].get("goal_id") or goal_id,
+                                }),
+                            )
+                            dummy_parsed = ParsedRecord(
+                                intent=IntentType.REQUEST_PLAN,
+                                date=ref,
+                                payload=plan_extra.get("plan_preview") or {},
+                                raw_message="",
+                                user_id=session.user_id,
+                            )
+                            await session.set_pending(
+                                PendingConfirm(parsed=dummy_parsed, duplicate=plan_dup)
+                            )
+                            combined = (
+                                (resp.message or "")
+                                + "\n\n"
+                                + plan_reply
+                                + "\n\n回复「确认」保存此计划，回复「取消」放弃。"
+                            )
                             return ChatResponse(
-                                user_id=resp.user_id, type=resp.type, message=combined,
+                                user_id=resp.user_id, type="plan_preview", message=combined,
                                 conversation_id=resp.conversation_id, parsed=resp.parsed,
                                 saved=resp.saved,
                                 extra={"plan_preview": plan_extra.get("plan_preview"), **(resp.extra or {})},
@@ -583,6 +725,141 @@ class ChatApplicationService:
             )
 
         # 既非确认也非取消：清掉待确认，按新消息重新处理
+        await session.clear_pending()
+        return await self.handle_chat_message(
+            session.user_id, msg, conversation_id=conversation_id,
+            trace_id=trace_id, soul_id=soul_id,
+        )
+
+    async def _handle_confirm_delete(
+        self,
+        session: Any,
+        pending: Any,
+        msg: str,
+        conversation_id: int,
+        ref: date,
+        trace_id: str = "",
+        soul_id: str | None = None,
+        soul_id_int: int | None = None,
+    ) -> ChatResponse:
+        if _is_cancel(msg):
+            await session.clear_pending()
+            reply = "好的，不删除了。"
+            await session.add_turn("assistant", reply, msg_type="cancelled", soul_id=soul_id_int)
+            return ChatResponse(
+                user_id=session.user_id, type="cancelled", message=reply,
+                conversation_id=conversation_id, trace_id=trace_id,
+            )
+
+        if not _is_confirm(msg):
+            await session.clear_pending()
+            return await self.handle_chat_message(
+                session.user_id, msg, conversation_id=conversation_id,
+                trace_id=trace_id, soul_id=soul_id,
+            )
+
+        await session.clear_pending()
+        try:
+            meta = json.loads(pending.duplicate.summary or "{}")
+        except Exception:
+            meta = {}
+        payload = pending.parsed.payload or {}
+        record_type = (meta.get("record_type") or payload.get("record_type") or "").strip().lower()
+        record_id = meta.get("record_id") or payload.get("record_id") or payload.get("plan_id")
+        if record_type in ("plan", "training-plans", "training_plans"):
+            record_type = "training_plan"
+
+        date_val = pending.parsed.date or ref
+        if isinstance(payload.get("date"), str):
+            try:
+                date_val = date.fromisoformat(payload["date"][:10])
+            except Exception:
+                pass
+
+        del_result = await self._edit_delete_runner.delete_record(
+            user_id=session.user_id,
+            record_type=record_type,
+            record_id=record_id,
+            date_arg=date_val,
+            meal_type=payload.get("meal_type"),
+            workout_type=payload.get("workout_type"),
+        )
+        if del_result.get("ok"):
+            reply = f"已删除 {record_type} 记录（id={del_result.get('id')}）。"
+        else:
+            reply = f"删除失败：{del_result.get('error', '未知错误')}"
+        log_chat_step(trace_id, session.user_id, "delete_record",
+                      result="ok" if del_result.get("ok") else del_result.get("error"))
+        await session.add_turn("assistant", reply, msg_type="delete_record", soul_id=soul_id_int)
+        return ChatResponse(
+            user_id=session.user_id, type="delete_record", message=reply,
+            conversation_id=conversation_id, trace_id=trace_id,
+        )
+
+    # ------------------------------------------------------------------
+    # 计划确认保存子流程
+    # ------------------------------------------------------------------
+
+    async def _handle_plan_confirm(
+        self,
+        session: Any,
+        pending: Any,
+        msg: str,
+        conversation_id: int,
+        ref: date,
+        trace_id: str = "",
+        soul_id: str | None = None,
+        soul_id_int: int | None = None,
+    ) -> ChatResponse:
+        if _is_confirm(msg):
+            await session.clear_pending()
+            try:
+                meta = json.loads(pending.duplicate.summary or "{}")
+            except Exception:
+                meta = {}
+            plan_preview = meta.get("plan_preview") or (pending.parsed.payload if pending.parsed else {})
+            goal_id = meta.get("goal_id") or (plan_preview.get("goal_id") if plan_preview else None)
+            if not goal_id or not plan_preview:
+                reply = "计划数据丢失，请重新生成计划。"
+                await session.add_turn("assistant", reply, msg_type="error", soul_id=soul_id_int)
+                return ChatResponse(
+                    user_id=session.user_id, type="error", message=reply,
+                    conversation_id=conversation_id, trace_id=trace_id,
+                )
+            try:
+                from src.infra.database.mysql import async_mysql_pool
+                from src.domain.interaction.record.training_plan import save_plan
+
+                async with async_mysql_pool.session() as db_session:
+                    tp, count = await save_plan(db_session, session.user_id, goal_id, plan_preview)
+                    await db_session.commit()
+                reply = f"训练计划已保存！共 {count} 个训练日，计划 ID={tp.id}。加油！"
+                log_chat_step(trace_id, session.user_id, "plan_saved",
+                              result=f"plan_id={tp.id}, sessions={count}")
+            except Exception as e:
+                reply = f"计划保存失败：{e}"
+                log_chat_step(trace_id, session.user_id, "plan_save_error", error=str(e))
+                await session.add_turn("assistant", reply, msg_type="error", soul_id=soul_id_int)
+                return ChatResponse(
+                    user_id=session.user_id, type="error", message=reply,
+                    conversation_id=conversation_id, trace_id=trace_id,
+                )
+            await session.add_turn("assistant", reply, msg_type="plan_saved", soul_id=soul_id_int)
+            return ChatResponse(
+                user_id=session.user_id, type="plan_saved", message=reply,
+                conversation_id=conversation_id, trace_id=trace_id,
+            )
+
+        if _is_cancel(msg):
+            await session.clear_pending()
+            reply = "好的，计划已放弃，有需要再告诉我。"
+            await session.add_turn("assistant", reply, msg_type="cancelled", soul_id=soul_id_int)
+            return ChatResponse(
+                user_id=session.user_id, type="cancelled", message=reply,
+                conversation_id=conversation_id, trace_id=trace_id,
+            )
+
+        # 既非确认也非取消：清掉 pending，按新消息处理
         await session.clear_pending()
         return await self.handle_chat_message(
             session.user_id, msg, conversation_id=conversation_id,
@@ -642,22 +919,24 @@ class ChatApplicationService:
         ref: date,
     ) -> tuple[str, dict]:
         from sqlalchemy import select
-        from src.infra.database.mysql import async_mysql_pool, Goal
+        from src.infra.database.mysql import async_mysql_pool, UserGoal
         from src.domain.interaction.record.training_plan import build_plan_preview
+        from src.infra.persistence.mysql_user_identity import get_or_create_user_id
 
         goal_id = payload.get("goal_id") if isinstance(payload.get("goal_id"), int) else None
         goal = None
+        uid = await get_or_create_user_id(user_id)
         async with async_mysql_pool.session() as session:
             if goal_id:
                 r = await session.execute(
-                    select(Goal).where(Goal.id == goal_id, Goal.user_id == user_id)
+                    select(UserGoal).where(UserGoal.id == goal_id, UserGoal.user_id == uid)
                 )
                 goal = r.scalars().first()
             if not goal:
                 r = await session.execute(
-                    select(Goal)
-                    .where(Goal.user_id == user_id, Goal.status.in_(["planning", "ongoing"]))
-                    .order_by(Goal.id.desc())
+                    select(UserGoal)
+                    .where(UserGoal.user_id == uid, UserGoal.status.in_(["draft", "active", "paused"]))
+                    .order_by(UserGoal.id.desc())
                     .limit(1)
                 )
                 goal = r.scalars().first()
@@ -666,7 +945,54 @@ class ChatApplicationService:
         preview = build_plan_preview(goal, ref)
         if not preview:
             return "当前目标类型暂不支持自动生成训练计划。", {}
-        return format_plan_preview_message(preview), {"plan_preview": preview}
+        return format_plan_preview_message(preview), {
+            "plan_preview": preview,
+            "plan_requires_confirm": True,
+        }
+
+    async def _reply_existing_plan(self, user_id: str) -> tuple[str, dict]:
+        from sqlalchemy import select, desc
+        from src.infra.database.mysql import async_mysql_pool, Plan, PlanVersion
+        from src.infra.persistence.mysql_user_identity import get_or_create_user_id
+
+        uid = await get_or_create_user_id(user_id)
+
+        async with async_mysql_pool.session() as session:
+            row = await session.execute(
+                select(Plan)
+                .where(Plan.user_id == uid, Plan.status == "active", Plan.plan_type == "training")
+                .order_by(desc(Plan.updated_at), desc(Plan.id))
+                .limit(1)
+            )
+            plan = row.scalars().first()
+            pv = None
+            if plan:
+                pv_row = await session.execute(
+                    select(PlanVersion)
+                    .where(PlanVersion.plan_id == plan.id)
+                    .order_by(desc(PlanVersion.version_no), desc(PlanVersion.id))
+                    .limit(1)
+                )
+                pv = pv_row.scalars().first()
+
+        if not plan:
+            return "你还没有已保存的训练计划。可以先说「帮我制定计划」。", {
+                "plan_requires_confirm": False
+            }
+
+        payload = pv.payload_json if (pv and isinstance(pv.payload_json, dict)) else {}
+        if not payload:
+            return "找到一条训练计划，但内容为空。你可以说「帮我制定计划」重新生成。", {
+                "plan_requires_confirm": False
+            }
+        title = payload.get("title") or plan.title or "训练计划"
+        payload.setdefault("title", title)
+        msg = f"这是你当前已保存的训练计划（计划 ID={plan.id}）："
+        return msg, {
+            "plan_preview": payload,
+            "plan_id": plan.id,
+            "plan_requires_confirm": False,
+        }
 
     # ------------------------------------------------------------------
     # 辅助

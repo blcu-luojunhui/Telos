@@ -97,8 +97,8 @@ NLU_SYSTEM_TEMPLATE = """\
 10) edit_last — 修改上一条记录（如「把刚才那条距离改成6公里」「改成午餐」）
     payload: record_type 可选 workout | meal | body_metric；updates: 要改的字段，如 {{"distance_km": 6}} 或 {{"meal_type": "lunch"}}
 
-11) delete_record — 删除某条记录（如「删掉刚才那条」「删除今天的午餐记录」）
-    payload: record_type 必填 workout | meal | body_metric | goal；可选 record_id；或 date + meal_type / workout_type 定位
+11) delete_record — 删除某条记录（如「删掉刚才那条」「删除今天的午餐记录」「删计划 id=2」）
+    payload: record_type 必填 workout | meal | body_metric | goal | training_plan；可选 record_id（或 plan_id）；或 date + meal_type / workout_type 定位
 
 12) request_plan — 要求制定或查看训练计划（如「帮我制定计划」「我的计划呢」「给我看看训练安排」）。常与 set_goal 同时出现（如「我要减肥从160到150，帮我制定计划」）。
     payload: 可为 {{}}；可选 goal_id（若用户指定了某个目标）
@@ -163,6 +163,10 @@ nlu_few_shot_examples = [
     {
         "input": "删掉今天的午餐记录",
         "output": '{"intent":"delete_record","date":null,"payload":{"record_type":"meal","date":"YYYY-MM-DD","meal_type":"lunch"}}',
+    },
+    {
+        "input": "你帮我删掉计划，计划id=2",
+        "output": '{"intent":"delete_record","date":null,"payload":{"record_type":"training_plan","record_id":2}}',
     },
 ]
 

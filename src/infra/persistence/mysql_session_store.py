@@ -1,49 +1,68 @@
 """
 MySQL 会话存储适配器：实现 ISessionStore，基于 user_id + conversation_id 持久化会话与待确认。
+
+会话超时：当最近一个 active 会话的 updated_at 距今超过 SESSION_TIMEOUT_MINUTES 时，
+自动将旧会话归档（status → archived），并创建新会话。
 """
 
 from __future__ import annotations
 
+import logging
+from datetime import datetime, date, timedelta, timezone
 from typing import Any, Optional
 
-from sqlalchemy import delete, select, desc, update
+from sqlalchemy import delete, select, desc, update, or_
 from sqlalchemy.sql import func
 
 from src.infra.database.mysql import (
     async_mysql_pool,
     Conversation,
     ChatMessage,
-    PendingConfirmation,
+    PendingAction,
     Soul,
 )
+from src.infra.persistence.mysql_user_identity import get_or_create_user_id
 from src.domain.interaction.duplicate_checker import DuplicateHit
 from src.domain.interaction.schemas import IntentType, ParsedRecord
 
+logger = logging.getLogger("session")
+
 CONTEXT_WINDOW = 20
-CONVERSATION_REUSE_MINUTES = 30  # 未使用：可后续做超时新建会话
+SESSION_TIMEOUT_MINUTES = 30
 
 
 class PendingConfirm:
-    """等待用户确认的操作，序列化存入 pending_confirmations 表。"""
+    """等待用户确认的操作，序列化存入 pending_actions 表。"""
 
     def __init__(self, parsed: ParsedRecord, duplicate: DuplicateHit):
         self.parsed = parsed
         self.duplicate = duplicate
 
     def to_dict(self) -> dict:
+        def _jsonable(value: Any) -> Any:
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return value
+            if isinstance(value, (datetime, date)):
+                return value.isoformat()
+            if isinstance(value, dict):
+                return {str(k): _jsonable(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple, set)):
+                return [_jsonable(v) for v in value]
+            return str(value)
+
         return {
             "parsed": {
                 "user_id": self.parsed.user_id or "",
                 "intent": self.parsed.intent.value,
                 "date": self.parsed.date.isoformat() if self.parsed.date else None,
-                "payload": self.parsed.payload,
+                "payload": _jsonable(self.parsed.payload),
                 "raw_message": self.parsed.raw_message,
             },
             "duplicate": {
                 "existing_id": self.duplicate.existing_id,
                 "table": self.duplicate.table,
                 "same_content": self.duplicate.same_content,
-                "summary": self.duplicate.summary,
+                "summary": _jsonable(self.duplicate.summary),
             },
         }
 
@@ -137,50 +156,84 @@ class MySQLUserSession:
             for r in reversed(rows)
         ]
 
-    def _pending_filter(self):
-        if self.conversation_id is not None:
-            return (
-                PendingConfirmation.user_id == self.user_id,
-                PendingConfirmation.conversation_id == self.conversation_id,
-            )
-        return (
-            PendingConfirmation.user_id == self.user_id,
-            PendingConfirmation.conversation_id.is_(None),
-        )
-
     async def set_pending(self, pending: PendingConfirm) -> None:
+        uid = await get_or_create_user_id(self.user_id)
+        pending_type_map = {
+            "_slot_fill": "slot_fill",
+            "_plan_confirm": "confirm_plan",
+            "_confirm_delete": "confirm_delete",
+            "_confirm_save": "confirm_save",
+        }
+        pending_type = pending_type_map.get(pending.duplicate.table, "confirm_save")
         async with async_mysql_pool.session() as session:
-            cond1, cond2 = self._pending_filter()
-            await session.execute(delete(PendingConfirmation).where(cond1, cond2))
+            cond = [
+                PendingAction.user_id == uid,
+                PendingAction.pending_type.in_(
+                    ["confirm_save", "confirm_delete", "slot_fill", "confirm_plan"]
+                ),
+            ]
+            if self.conversation_id is not None:
+                cond.append(PendingAction.conversation_id == self.conversation_id)
+            else:
+                cond.append(PendingAction.conversation_id.is_(None))
+            await session.execute(delete(PendingAction).where(*cond))
             snap = pending.to_dict()
-            rec = PendingConfirmation(
-                user_id=self.user_id,
+            rec = PendingAction(
+                user_id=uid,
                 conversation_id=self.conversation_id,
-                parsed_snapshot=snap["parsed"],
-                duplicate_snapshot=snap["duplicate"],
+                pending_type=pending_type,
+                snapshot_json=snap,
             )
             session.add(rec)
             await session.commit()
 
     async def get_pending(self) -> Optional[PendingConfirm]:
+        uid = await get_or_create_user_id(self.user_id)
         async with async_mysql_pool.session() as session:
-            cond1, cond2 = self._pending_filter()
-            stmt = select(PendingConfirmation).where(cond1, cond2)
+            cond = [
+                PendingAction.user_id == uid,
+                PendingAction.pending_type.in_(
+                    ["confirm_save", "confirm_delete", "slot_fill", "confirm_plan"]
+                ),
+            ]
+            if self.conversation_id is not None:
+                cond.append(PendingAction.conversation_id == self.conversation_id)
+            else:
+                cond.append(PendingAction.conversation_id.is_(None))
+            stmt = select(PendingAction).where(*cond).order_by(desc(PendingAction.id)).limit(1)
             result = await session.execute(stmt)
             row = result.scalars().first()
         if not row:
             return None
         try:
-            return PendingConfirm.from_dict(
-                {"parsed": row.parsed_snapshot, "duplicate": row.duplicate_snapshot}
-            )
+            snap = row.snapshot_json or {}
+            if not isinstance(snap, dict):
+                return None
+            if "parsed" in snap and "duplicate" in snap:
+                return PendingConfirm.from_dict(snap)
+            # 兼容极端脏数据
+            if "parsed_snapshot" in snap and "duplicate_snapshot" in snap:
+                return PendingConfirm.from_dict(
+                    {"parsed": snap["parsed_snapshot"], "duplicate": snap["duplicate_snapshot"]}
+                )
+            return None
         except Exception:
             return None
 
     async def clear_pending(self) -> None:
+        uid = await get_or_create_user_id(self.user_id)
         async with async_mysql_pool.session() as session:
-            cond1, cond2 = self._pending_filter()
-            await session.execute(delete(PendingConfirmation).where(cond1, cond2))
+            cond = [
+                PendingAction.user_id == uid,
+                PendingAction.pending_type.in_(
+                    ["confirm_save", "confirm_delete", "slot_fill", "confirm_plan"]
+                ),
+            ]
+            if self.conversation_id is not None:
+                cond.append(PendingAction.conversation_id == self.conversation_id)
+            else:
+                cond.append(PendingAction.conversation_id.is_(None))
+            await session.execute(delete(PendingAction).where(*cond))
             await session.commit()
 
     async def has_pending(self) -> bool:
@@ -190,12 +243,26 @@ class MySQLUserSession:
 class MySQLSessionStore:
     """实现 ISessionStore：会话创建、获取、校验。"""
 
+    def __init__(self, timeout_minutes: int = SESSION_TIMEOUT_MINUTES):
+        self._timeout_minutes = timeout_minutes
+
     async def get_or_create_conversation(
         self,
         user_id: str,
         conversation_id: Optional[int] = None,
     ) -> int:
+        """
+        返回应使用的 conversation_id。
+
+        逻辑：
+        1. 前端显式传入 conversation_id → 校验归属后直接使用
+        2. 否则找最近一个 active 会话：
+           a. updated_at 在超时阈值内 → 复用
+           b. 已超时 → 归档旧会话、清除其 pending，创建新会话
+        3. 无 active 会话 → 新建
+        """
         async with async_mysql_pool.session() as session:
+            # 1. 前端显式指定
             if conversation_id is not None:
                 result = await session.execute(
                     select(Conversation).where(
@@ -206,23 +273,69 @@ class MySQLSessionStore:
                 conv = result.scalars().one_or_none()
                 if conv is not None:
                     return conversation_id
+
+            # 2. 找最近 active/pinned 会话
             result = await session.execute(
                 select(Conversation)
                 .where(
                     Conversation.user_id == user_id,
-                    Conversation.status == "active",
+                    or_(Conversation.status == "active", Conversation.status == "pinned"),
                 )
                 .order_by(desc(Conversation.updated_at))
                 .limit(1)
             )
             latest = result.scalars().one_or_none()
-            if latest:
-                return latest.id
+
+            if latest is not None:
+                # 置顶会话不受超时切分影响，始终复用
+                if latest.status == "pinned":
+                    return latest.id
+                if not self._is_expired(latest.updated_at):
+                    return latest.id
+                # 超时：归档旧会话
+                await session.execute(
+                    update(Conversation)
+                    .where(Conversation.id == latest.id)
+                    .values(status="archived")
+                )
+                await session.execute(
+                    delete(PendingAction).where(
+                        PendingAction.user_id == await get_or_create_user_id(user_id),
+                        PendingAction.conversation_id == latest.id,
+                    )
+                )
+                logger.info(
+                    "Session %d expired (user=%s, idle %s), archived → creating new",
+                    latest.id, user_id,
+                    self._idle_desc(latest.updated_at),
+                )
+
+            # 3. 新建
             conv = Conversation(user_id=user_id, status="active")
             session.add(conv)
             await session.commit()
             await session.refresh(conv)
+            logger.debug("New session %d created for user=%s", conv.id, user_id)
             return conv.id
+
+    def _is_expired(self, updated_at: Optional[datetime]) -> bool:
+        if updated_at is None:
+            return True
+        now = datetime.now(timezone.utc)
+        ua = updated_at if updated_at.tzinfo else updated_at.replace(tzinfo=timezone.utc)
+        return (now - ua) > timedelta(minutes=self._timeout_minutes)
+
+    @staticmethod
+    def _idle_desc(updated_at: Optional[datetime]) -> str:
+        if updated_at is None:
+            return "unknown"
+        now = datetime.now(timezone.utc)
+        ua = updated_at if updated_at.tzinfo else updated_at.replace(tzinfo=timezone.utc)
+        delta = now - ua
+        minutes = int(delta.total_seconds() / 60)
+        if minutes < 60:
+            return f"{minutes}m"
+        return f"{minutes // 60}h{minutes % 60}m"
 
     def get_user_session(
         self,
@@ -237,7 +350,7 @@ class MySQLSessionStore:
                 select(Conversation.id)
                 .where(
                     Conversation.user_id == user_id,
-                    Conversation.status == "active",
+                    or_(Conversation.status == "active", Conversation.status == "pinned"),
                 )
                 .order_by(desc(Conversation.updated_at))
                 .limit(1)

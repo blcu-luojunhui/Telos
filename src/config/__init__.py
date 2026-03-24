@@ -39,6 +39,54 @@ class Config(BaseSettings):
     # ============ 数据库配置 ============
     better_me: BetterMeMySQLConfig = Field(default_factory=BetterMeMySQLConfig)
 
+    # ============ Auth / JWT 配置 ============
+    JWT_SECRET: str = Field(
+        default="change-me-in-prod",
+        description="JWT 签名密钥，生产环境必须通过环境变量 JWT_SECRET 覆盖",
+    )
+    JWT_ALGORITHM: str = Field(
+        default="HS256",
+        description="JWT 签名算法",
+    )
+    JWT_EXPIRE_SECONDS: int = Field(
+        default=7 * 24 * 3600,
+        description="JWT 过期时间（秒），默认 7 天",
+    )
+    GOOGLE_CLIENT_ID: str = Field(default="", description="Google OAuth Client ID")
+    GOOGLE_CLIENT_SECRET: str = Field(default="", description="Google OAuth Client Secret")
+    GOOGLE_AUTH_URL: str = Field(
+        default="https://accounts.google.com/o/oauth2/v2/auth",
+        description="Google OAuth authorize endpoint",
+    )
+    GOOGLE_TOKEN_URL: str = Field(
+        default="https://oauth2.googleapis.com/token",
+        description="Google OAuth token endpoint",
+    )
+    GOOGLE_USERINFO_URL: str = Field(
+        default="https://www.googleapis.com/oauth2/v3/userinfo",
+        description="Google OAuth userinfo endpoint",
+    )
+    GOOGLE_SCOPE: str = Field(default="openid email profile", description="Google OAuth scopes")
+
+    APPLE_CLIENT_ID: str = Field(default="", description="Apple OAuth Client ID (Service ID)")
+    APPLE_CLIENT_SECRET: str = Field(
+        default="",
+        description="Apple OAuth client secret (JWT string generated from Apple key)",
+    )
+    APPLE_AUTH_URL: str = Field(
+        default="https://appleid.apple.com/auth/authorize",
+        description="Apple OAuth authorize endpoint",
+    )
+    APPLE_TOKEN_URL: str = Field(
+        default="https://appleid.apple.com/auth/token",
+        description="Apple OAuth token endpoint",
+    )
+    APPLE_USERINFO_URL: str = Field(
+        default="",
+        description="Apple userinfo endpoint (optional; Apple usually returns id_token claims)",
+    )
+    APPLE_SCOPE: str = Field(default="name email", description="Apple OAuth scopes")
+
     # ============ LLM（交互层 NLU）：供应商 + 各供应商配置 ============
     llm_provider: LLMProviderType = Field(
         default="deepseek",

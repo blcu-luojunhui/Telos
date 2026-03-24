@@ -3,9 +3,10 @@ from __future__ import annotations
 from datetime import date, time as dt_time, timedelta
 from typing import Any, Optional
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.infra.database.mysql import TrainingPlan, TrainingPlanSession, Goal
+from src.infra.database.mysql import Plan, PlanGoalLink, PlanItem, PlanVersion, UserGoal
 
 
 def _safe_date(d: Optional[date], fallback: date) -> date:
@@ -35,14 +36,14 @@ def _race_type_title(race_type: str | None) -> str:
 
 
 def _build_simple_race_plan(
-    goal: Goal,
+    goal: UserGoal,
     today: date,
 ) -> dict[str, Any] | None:
-    target: dict[str, Any] = goal.target or {}
+    target: dict[str, Any] = goal.success_definition_json or {}
     race_type = (target.get("race_type") or "").strip() or "race"
     # 优先使用 target.race_date，其次 goal.deadline
     race_date_str = (target.get("race_date") or "").strip() or None
-    end_date = goal.deadline
+    end_date = goal.target_date
     if race_date_str:
         try:
             y, m, d = [int(x) for x in race_date_str.replace(".", "-").replace("/", "-").split("-")[:3]]
@@ -106,7 +107,7 @@ def _build_simple_race_plan(
     title = f"{_race_type_title(race_type)} 训练计划（目标日 {end_date.isoformat()}）"
     return {
         "goal_id": goal.id,
-        "goal_type": goal.type,
+        "goal_type": goal.goal_type,
         "race_type": race_type,
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
@@ -115,12 +116,12 @@ def _build_simple_race_plan(
     }
 
 
-def _build_simple_weight_loss_plan(goal: Goal, today: date) -> dict[str, Any]:
-    target = goal.target or {}
+def _build_simple_weight_loss_plan(goal: UserGoal, today: date) -> dict[str, Any]:
+    target = goal.success_definition_json or {}
     start_weight = target.get("start_weight")
     target_weight = target.get("target_weight")
 
-    end_date = _safe_date(goal.deadline, today + timedelta(weeks=12))
+    end_date = _safe_date(goal.target_date, today + timedelta(weeks=12))
     if end_date <= today:
         end_date = today + timedelta(weeks=8)
 
@@ -171,7 +172,7 @@ def _build_simple_weight_loss_plan(goal: Goal, today: date) -> dict[str, Any]:
 
     return {
         "goal_id": goal.id,
-        "goal_type": goal.type,
+        "goal_type": goal.goal_type,
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
         "title": title,
@@ -215,7 +216,7 @@ def _plan_struct_to_preview(plan_struct: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_plan_preview(
-    goal: Goal,
+    goal: UserGoal,
     today: Optional[date] = None,
 ) -> Optional[dict[str, Any]]:
     """
@@ -224,9 +225,9 @@ def build_plan_preview(
     """
     today = today or date.today()
     plan_struct: Optional[dict[str, Any]] = None
-    if goal.type == "race":
+    if goal.goal_type == "race":
         plan_struct = _build_simple_race_plan(goal, today)
-    elif goal.type == "weight_loss":
+    elif goal.goal_type == "weight_loss":
         plan_struct = _build_simple_weight_loss_plan(goal, today)
     if not plan_struct:
         return None
@@ -238,9 +239,9 @@ async def save_plan(
     user_id: str,
     goal_id: int,
     plan_payload: dict[str, Any],
-) -> tuple[TrainingPlan, int]:
+) -> tuple[Plan, int]:
     """
-    用户确认后，将计划写入 training_plans 与 training_plan_sessions。
+    用户确认后，将计划写入 plans / plan_versions / plan_items。
     plan_payload 为预览接口返回的结构（含 title, start_date, end_date, days[].sessions[]）。
     返回 (training_plan, sessions_count)。
     """
@@ -260,18 +261,32 @@ async def save_plan(
         except (ValueError, TypeError):
             pass
 
-    tp = TrainingPlan(
-        user_id=user_id,
-        goal_id=goal_id,
+    user_row = await session.execute(select(UserGoal).where(UserGoal.id == goal_id).limit(1))
+    goal = user_row.scalars().first()
+    if goal is None:
+        raise ValueError(f"goal_id {goal_id} not found")
+
+    p = Plan(
+        user_id=goal.user_id,
+        plan_type="training",
         title=title,
-        goal_type=plan_payload.get("goal_type"),
-        start_date=start_date,
-        end_date=end_date,
-        plan=plan_payload,
         status="active",
     )
-    session.add(tp)
+    session.add(p)
     await session.flush()
+    pv = PlanVersion(
+        plan_id=p.id,
+        version_no=1,
+        generated_by="agent",
+        trigger_type="goal_created",
+        summary=title,
+        payload_json=plan_payload,
+    )
+    session.add(pv)
+    await session.flush()
+    session.add(
+        PlanGoalLink(plan_id=p.id, goal_id=goal_id, role="primary", weight=1.0)
+    )
 
     days = plan_payload.get("days") or []
     sessions_count = 0
@@ -301,55 +316,57 @@ async def save_plan(
             if not isinstance(remind, bool):
                 remind = bool(remind)
 
-            tps = TrainingPlanSession(
-                user_id=user_id,
-                training_plan_id=tp.id,
-                goal_id=goal_id,
-                scheduled_date=day_date,
-                scheduled_time=scheduled_time,
-                slot_type=slot_type,
-                summary=summary,
-                remind_day_before=remind,
+            pi = PlanItem(
+                plan_version_id=pv.id,
+                user_id=goal.user_id,
+                item_date=day_date,
+                item_type="workout",
+                day_type=(
+                    "key_workout_day"
+                    if slot_type in ("quality", "long_run")
+                    else "easy_day" if slot_type == "easy" else "rest_day"
+                ),
+                title=summary[:255],
+                instruction_json={
+                    "slot_type": slot_type,
+                    "scheduled_time": scheduled_time.isoformat() if scheduled_time else None,
+                    "remind_day_before": remind,
+                },
+                target_json={"summary": summary},
                 status="pending",
                 order_in_day=order_in_day,
             )
-            session.add(tps)
+            session.add(pi)
             sessions_count += 1
     await session.flush()
-    return tp, sessions_count
+    return p, sessions_count
 
 
 async def maybe_create_training_plan_for_goal(
     session: AsyncSession,
     user_id: str,
-    goal: Goal,
+    goal: UserGoal,
     today: Optional[date] = None,
-) -> Optional[TrainingPlan]:
+) -> Optional[Plan]:
     """
-    根据 Goal 自动生成一个基础训练计划并写入 training_plans 表。
+    根据 UserGoal 自动生成一个基础训练计划并写入 plans 表。
     若无法生成（例如缺少关键信息），则返回 None，不报错。
     """
     today = today or date.today()
 
     plan_struct: Optional[dict[str, Any]] = None
-    if goal.type == "race":
+    if goal.goal_type == "race":
         plan_struct = _build_simple_race_plan(goal, today)
-    elif goal.type == "weight_loss":
+    elif goal.goal_type == "weight_loss":
         plan_struct = _build_simple_weight_loss_plan(goal, today)
 
     if not plan_struct:
         return None
 
-    tp = TrainingPlan(
-        user_id=user_id,
-        goal_id=goal.id,
+    tp = Plan(
+        user_id=goal.user_id,
+        plan_type="training",
         title=plan_struct.get("title") or "训练计划",
-        goal_type=plan_struct.get("goal_type") or goal.type,
-        start_date=today,
-        end_date=date.fromisoformat(plan_struct["end_date"])
-        if plan_struct.get("end_date")
-        else None,
-        plan=plan_struct,
         status="active",
     )
     session.add(tp)

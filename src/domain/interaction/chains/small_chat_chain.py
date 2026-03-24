@@ -7,11 +7,12 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from langchain_core.tools import StructuredTool
 
 from src.domain.interaction.chat.stickers import parse_sticker_from_reply
+from ..callbacks import InteractionCallbackHandler
 from ..llm import get_chat_model
 from ..prompts.chat import build_chat_prompt
 
@@ -51,10 +52,14 @@ async def small_chat_reply(
     message: str,
     history: Sequence[dict],
     soul_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    metrics: Optional[dict[str, Any]] = None,
 ) -> tuple[str, Optional[int]]:
     """
     当 NLU 未识别出结构化记录意图时，基于历史上下文给出自然语言回复。
 
+    :param metrics:
+    :param trace_id:
     :param user_id: 用户 ID
     :param message: 用户输入
     :param history: 对话历史
@@ -71,13 +76,14 @@ async def small_chat_reply(
     }
 
     weixin_tool = _build_weixin_search_tool()
+    cb = InteractionCallbackHandler(trace_id=trace_id or "small_chat")
     raw: Optional[str] = None
 
     if weixin_tool:
         try:
             from langchain.agents import AgentExecutor, create_tool_calling_agent
 
-            llm = get_chat_model(temperature=0.4, max_tokens=200)
+            llm = get_chat_model(temperature=0.55, max_tokens=380)
             tools = [weixin_tool]
 
             agent = create_tool_calling_agent(llm, tools, chat_prompt)
@@ -86,19 +92,26 @@ async def small_chat_reply(
                 tools=tools,
                 max_iterations=4,
                 handle_parsing_errors=True,
+                callbacks=[cb],
             )
             result = await executor.ainvoke(chain_input)
             raw = (result.get("output") or "").strip()
+            if metrics is not None:
+                metrics["small_chat"] = cb.summary()
         except Exception:
             raw = None
 
     if not raw:
-        llm = get_chat_model(temperature=0.4, max_tokens=200)
-        result = await (chat_prompt | llm).ainvoke(chain_input)
+        llm = get_chat_model(temperature=0.55, max_tokens=380)
+        result = await (chat_prompt | llm).ainvoke(
+            chain_input, config={"callbacks": [cb]}
+        )
         raw = (result.content or "").strip()
+        if metrics is not None:
+            metrics["small_chat"] = cb.summary()
 
     if not raw:
-        raw = "我在听，你可以再多说一点，或者告诉我想记录今天的饮食、运动或身体数据。"
+        raw = "我在这儿，刚刚可能卡了一下没接住。你可以再说一遍，我会认真接着聊；要是你想，我也可以顺手帮你把饮食、运动或身体数据记下来。"
 
     reply_text, sticker_id = parse_sticker_from_reply(raw)
     reply_text = reply_text or raw

@@ -6,6 +6,8 @@ from datetime import date
 
 from quart import Blueprint, request, jsonify
 
+from src.core.audit import new_trace_id
+from src.core.routes.auth import jwt_required
 from src.domain.interaction import parse_user_message
 
 
@@ -13,6 +15,7 @@ def create_nlu_bp() -> Blueprint:
     nlu_bp = Blueprint("nlu", __name__, url_prefix="/v1/api")
 
     @nlu_bp.route("/nlu", methods=["POST"])
+    @jwt_required
     async def nlu():
         """
         Body: { "message": "...", "date": "2025-02-27"(可选) }
@@ -32,9 +35,24 @@ def create_nlu_bp() -> Blueprint:
 
         try:
             # 独立 NLU 接口默认不带多轮上下文；支持一句话多意图，返回列表
-            parsed_list = await parse_user_message(message, reference_date=ref_date)
+            trace_id = request.headers.get("X-Trace-ID") or new_trace_id()
+            metrics: dict = {}
+            parsed_list = await parse_user_message(
+                message,
+                reference_date=ref_date,
+                trace_id=trace_id,
+                metrics=metrics,
+            )
             if not parsed_list:
-                return jsonify({"intents": [], "intent": "unknown", "date": None, "payload": {}, "raw_message": message}), 200
+                return jsonify({
+                    "intents": [],
+                    "intent": "unknown",
+                    "date": None,
+                    "payload": {},
+                    "raw_message": message,
+                    "trace_id": trace_id,
+                    "llm_metrics": metrics or {},
+                }), 200
             primary = parsed_list[0]
             return jsonify(
                 {
@@ -42,6 +60,8 @@ def create_nlu_bp() -> Blueprint:
                     "date": primary.date.isoformat() if primary.date else None,
                     "payload": primary.payload,
                     "raw_message": primary.raw_message,
+                    "trace_id": trace_id,
+                    "llm_metrics": metrics or {},
                     "intents": [
                         {
                             "intent": p.intent.value,
@@ -53,6 +73,6 @@ def create_nlu_bp() -> Blueprint:
                 }
             ), 200
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return jsonify({"error": str(e), "trace_id": trace_id}), 500
 
     return nlu_bp

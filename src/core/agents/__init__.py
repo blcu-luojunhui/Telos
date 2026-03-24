@@ -1,3 +1,5 @@
-from .reason_action_agent import ReActAgent, ReActResult, ReActStep
+"""
+Agent 模块：旧 ReAct Agent 已移除，交互层已迁移至 LangChain Agent。
 
-__all__ = ["ReActAgent", "ReActResult", "ReActStep"]
+小聊天 Agent 见 src/domain/interaction/chains/small_chat_chain.py
+"""

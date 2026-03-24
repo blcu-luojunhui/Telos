@@ -11,6 +11,9 @@
 - chat: 回复模型 (ChatResponse)、展示格式化、slot 补全、表情包
 - duplicate_checker: 重复检测领域模型
 - ports: 领域端口 Protocol 定义
+
+LangChain 相关导出（parse_user_message, run_interaction_agent）延迟加载，
+确保仅导入 schemas / chat / nlu 纯函数模块时不要求 langchain 已安装。
 """
 
 from .schemas import (
@@ -22,10 +25,21 @@ from .schemas import (
     SetGoalPayload,
     RecordStatusPayload,
 )
-from .nlu import parse_user_message
-from .record import apply_parsed_record
 from .chat import ChatResponse
-from .agents import run_interaction_agent
+
+
+def __getattr__(name: str):
+    if name == "parse_user_message":
+        from .nlu import parse_user_message
+        return parse_user_message
+    if name == "apply_parsed_record":
+        from .record import apply_parsed_record
+        return apply_parsed_record
+    if name == "run_interaction_agent":
+        from .agents import run_interaction_agent
+        return run_interaction_agent
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "ParsedRecord",

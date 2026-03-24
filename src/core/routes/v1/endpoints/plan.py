@@ -7,21 +7,27 @@ from datetime import date
 from quart import Blueprint, request, jsonify
 from sqlalchemy import select
 
-from src.infra.database.mysql import async_mysql_pool, Goal
+from src.core.routes.auth import jwt_required
+from src.infra.database.mysql import async_mysql_pool, UserGoal
 from src.domain.interaction.record.training_plan import build_plan_preview, save_plan
+from src.infra.persistence.mysql_user_identity import get_or_create_user_id
 
 
 def create_plan_bp() -> Blueprint:
     plan_bp = Blueprint("plan", __name__, url_prefix="/v1/api")
 
     @plan_bp.route("/plan/preview", methods=["POST"])
+    @jwt_required
     async def plan_preview():
         """
         根据目标生成计划预览（不写库），供前端表格展示。
         Body: { "user_id": "...", "goal_id": 123 }
         """
         data = await request.get_json() or {}
+        token_user = getattr(request, "user", None)
         user_id = (data.get("user_id") or "").strip()
+        if token_user:
+            user_id = str(token_user).strip()
         goal_id = data.get("goal_id")
         if not user_id:
             return jsonify({"error": "user_id is required"}), 400
@@ -32,9 +38,10 @@ def create_plan_bp() -> Blueprint:
         except (TypeError, ValueError):
             return jsonify({"error": "goal_id must be an integer"}), 400
 
+        uid = await get_or_create_user_id(user_id)
         async with async_mysql_pool.session() as session:
             result = await session.execute(
-                select(Goal).where(Goal.id == goal_id, Goal.user_id == user_id)
+                select(UserGoal).where(UserGoal.id == goal_id, UserGoal.user_id == uid)
             )
             goal = result.scalars().first()
         if not goal:
@@ -47,6 +54,7 @@ def create_plan_bp() -> Blueprint:
         return jsonify(preview), 200
 
     @plan_bp.route("/plan/confirm", methods=["POST"])
+    @jwt_required
     async def plan_confirm():
         """
         用户确认计划后落库。
@@ -54,7 +62,10 @@ def create_plan_bp() -> Blueprint:
         plan 为预览接口返回的完整结构（含 title, start_date, end_date, days[].sessions[]）。
         """
         data = await request.get_json() or {}
+        token_user = getattr(request, "user", None)
         user_id = (data.get("user_id") or "").strip()
+        if token_user:
+            user_id = str(token_user).strip()
         goal_id = data.get("goal_id")
         plan_payload = data.get("plan")
         if not user_id:
@@ -68,9 +79,10 @@ def create_plan_bp() -> Blueprint:
         except (TypeError, ValueError):
             return jsonify({"error": "goal_id must be an integer"}), 400
 
+        uid = await get_or_create_user_id(user_id)
         async with async_mysql_pool.session() as session:
             result = await session.execute(
-                select(Goal).where(Goal.id == goal_id, Goal.user_id == user_id)
+                select(UserGoal).where(UserGoal.id == goal_id, UserGoal.user_id == uid)
             )
             goal = result.scalars().first()
             if not goal:

@@ -1,22 +1,55 @@
 """
-ORM models (mappers) for better_me MySQL data layer.
-Tables: workouts, body_metrics, meals, user_profile, goals, conversations, chat_messages, pending_confirmations.
+LEGACY MODELS (V1) - Do not use for new development.
 
-使用方式：先 async_mysql_pool.init(app) 或 init(dsn=...)，再通过 async_mysql_pool.session() 取 Session，例如：
-    from src.infra.database.mysql import async_mysql_pool, Workout
-    from sqlalchemy import select
-    async with async_mysql_pool.session() as session:
-        result = await session.execute(select(Workout).where(Workout.date >= ...))
+该文件仅用于历史迁移与数据回溯参考。
+运行期默认模型入口已切换到：
+- models_runtime.py （认证/会话/消息）
+- models_v2.py      （用户/事实记录/目标/计划/pending_actions）
+
+注意：
+1) 新代码不要从本文件导入业务模型。
+2) create_all 运行链路不应再依赖本文件，以避免 V1 旧表被重新建回。
+3) 在完成 V2 全量切换与数据校验后，可配合 SQL 脚本删除 V1 表。
 """
 
 from datetime import date, datetime, time
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text, JSON, Time, Boolean
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    Time,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from .base import Base
+
+
+class AuthUser(Base):
+    """认证用户账号表：保存 user_id 与密码哈希。"""
+
+    __tablename__ = "auth_users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -28,6 +61,13 @@ class Workout(Base):
     """训练记录：跑步、篮球、力量等。主观体验为一等公民。"""
 
     __tablename__ = "workouts"
+    __table_args__ = (
+        Index("ix_workouts_user_date_type_status", "user_id", "date", "type", "status"),
+        CheckConstraint(
+            "status in ('active','replaced','deleted')",
+            name="ck_workouts_status",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -69,6 +109,13 @@ class BodyMetric(Base):
     """身体指标：体重、体脂、睡眠等。"""
 
     __tablename__ = "body_metrics"
+    __table_args__ = (
+        Index("ix_body_metrics_user_date_status", "user_id", "date", "status"),
+        CheckConstraint(
+            "status in ('active','replaced','deleted')",
+            name="ck_body_metrics_status",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -103,6 +150,13 @@ class Meal(Base):
     """饮食记录。起步阶段可简化，主观体验（饱腹感、心情）一并记录。"""
 
     __tablename__ = "meals"
+    __table_args__ = (
+        Index("ix_meals_user_date_type_status", "user_id", "date", "meal_type", "status"),
+        CheckConstraint(
+            "status in ('active','replaced','deleted')",
+            name="ck_meals_status",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -173,6 +227,13 @@ class Goal(Base):
     """目标：减脂、增肌、维持、比赛等。type 区分类型，target 存结构化内容（JSON）。"""
 
     __tablename__ = "goals"
+    __table_args__ = (
+        Index("ix_goals_user_status_type", "user_id", "status", "type"),
+        CheckConstraint(
+            "status in ('planning','ongoing','completed','abandoned')",
+            name="ck_goals_status",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -200,6 +261,13 @@ class TrainingPlan(Base):
     """训练计划：按天/阶段安排训练内容，关联目标；计划内单次训练见 TrainingPlanSession。"""
 
     __tablename__ = "training_plans"
+    __table_args__ = (
+        Index("ix_training_plans_user_goal_status", "user_id", "goal_id", "status"),
+        CheckConstraint(
+            "status in ('active','archived','completed')",
+            name="ck_training_plans_status",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -233,6 +301,25 @@ class TrainingPlanSession(Base):
     """计划内单次训练：每一条对应某天的一场训练，可关联实际执行 workout。"""
 
     __tablename__ = "training_plan_sessions"
+    __table_args__ = (
+        UniqueConstraint(
+            "training_plan_id",
+            "scheduled_date",
+            "order_in_day",
+            name="uq_tps_plan_date_order",
+        ),
+        Index(
+            "ix_tps_user_plan_date_status",
+            "user_id",
+            "training_plan_id",
+            "scheduled_date",
+            "status",
+        ),
+        CheckConstraint(
+            "status in ('pending','completed','skipped','rescheduled')",
+            name="ck_tps_status",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -298,6 +385,13 @@ class Conversation(Base):
     """会话：一个用户可有多个会话，每个会话有独立消息列表。"""
 
     __tablename__ = "conversations"
+    __table_args__ = (
+        Index("ix_conversations_user_status_updated", "user_id", "status", "updated_at"),
+        CheckConstraint(
+            "status in ('active','archived','pinned')",
+            name="ck_conversations_status",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -320,6 +414,14 @@ class ChatMessage(Base):
     """对话消息记录：归属某会话，用于上下文感知；assistant 消息可记录来自哪个人格。"""
 
     __tablename__ = "chat_messages"
+    __table_args__ = (
+        Index("ix_chat_messages_conv_created", "conversation_id", "created_at"),
+        Index("ix_chat_messages_user_created", "user_id", "created_at"),
+        CheckConstraint(
+            "role in ('user','assistant','system')",
+            name="ck_chat_messages_role",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     conversation_id: Mapped[Optional[int]] = mapped_column(
@@ -355,6 +457,13 @@ class PendingConfirmation(Base):
     """待用户确认的覆盖操作：进入需要确认时插入，确认/取消后删除。"""
 
     __tablename__ = "pending_confirmations"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "conversation_id",
+            name="uq_pending_confirm_user_conversation",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -364,3 +473,225 @@ class PendingConfirmation(Base):
     parsed_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
     duplicate_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+# ---------------------------------------------------------------------------
+# AutoAgent: 原子动作事件 agent_action_events
+# ---------------------------------------------------------------------------
+
+
+class AgentActionEvent(Base):
+    """AutoAgent 每一步动作事件日志：用于可观测、回放、进化学习。"""
+
+    __tablename__ = "agent_action_events"
+    __table_args__ = (
+        Index("ix_agent_action_events_trace", "trace_id"),
+        Index("ix_agent_action_events_conv_step", "conversation_id", "step_index"),
+        Index("ix_agent_action_events_action_created", "action_name", "created_at"),
+        CheckConstraint(
+            "action_type in ('emic','etic')",
+            name="ck_agent_action_events_action_type",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    trace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    conversation_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("conversations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    step_index: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    intent: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    action_type: Mapped[str] = mapped_column(String(16), nullable=False)  # emic / etic
+    action_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    intent_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    params_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    outcome_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    error_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    token_in: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    token_out: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+# ---------------------------------------------------------------------------
+# AutoAgent: step 级记忆 agent_step_memories
+# ---------------------------------------------------------------------------
+
+
+class AgentStepMemory(Base):
+    """每一步的双轨记忆：raw_record + compressed_summary。"""
+
+    __tablename__ = "agent_step_memories"
+    __table_args__ = (
+        Index("ix_agent_step_memories_event", "event_id"),
+        Index("ix_agent_step_memories_importance", "importance_score"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("agent_action_events.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    conversation_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("conversations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    raw_record: Mapped[str] = mapped_column(Text, nullable=False)
+    compressed_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tags_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    importance_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+# ---------------------------------------------------------------------------
+# AutoAgent: episode 级记忆 agent_episodes
+# ---------------------------------------------------------------------------
+
+
+class AgentEpisode(Base):
+    """多步骤事件压缩后的 episodic memory。"""
+
+    __tablename__ = "agent_episodes"
+    __table_args__ = (
+        Index("ix_agent_episodes_user_conv", "user_id", "conversation_id"),
+        Index("ix_agent_episodes_step_range", "conversation_id", "start_step", "end_step"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    conversation_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("conversations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    start_step: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_step: Mapped[int] = mapped_column(Integer, nullable=False)
+    goal_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    episode_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    resolution_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    success_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+# ---------------------------------------------------------------------------
+# AutoAgent: 认知库（工具 / 技能 / 协作对象）
+# ---------------------------------------------------------------------------
+
+
+class AgentCognitionTool(Base):
+    """工具认知画像：可持续更新的前置条件、失败模式、成功样例。"""
+
+    __tablename__ = "agent_cognition_tools"
+    __table_args__ = (
+        UniqueConstraint("tool_name", name="uq_agent_cognition_tools_tool_name"),
+        Index("ix_agent_cognition_tools_reliability", "reliability_score"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tool_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    preconditions: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    failure_patterns: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    success_examples: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    reliability_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.5, server_default="0.5")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.now(),
+        onupdate=func.now(),
+        index=True,
+    )
+
+
+class AgentSkill(Base):
+    """技能卡片：从高频成功轨迹抽象出的复合动作。"""
+
+    __tablename__ = "agent_skills"
+    __table_args__ = (
+        UniqueConstraint("skill_name", name="uq_agent_skills_skill_name"),
+        CheckConstraint(
+            "status in ('draft','active','deprecated')",
+            name="ck_agent_skills_status",
+        ),
+        Index("ix_agent_skills_status_success", "status", "success_rate"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    skill_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    trigger_conditions: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    procedure: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    io_contract: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    success_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.now(),
+        onupdate=func.now(),
+        index=True,
+    )
+
+
+class AgentCognitionPeer(Base):
+    """外部协作认知：对外部代理/服务的能力与可靠性估计。"""
+
+    __tablename__ = "agent_cognition_peers"
+    __table_args__ = (
+        UniqueConstraint("peer_name", name="uq_agent_cognition_peers_peer_name"),
+        Index("ix_agent_cognition_peers_domain_reliability", "domain", "reliability_score"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    peer_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    domain: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    reliability_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.5, server_default="0.5")
+    response_style: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.now(),
+        onupdate=func.now(),
+        index=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# AutoAgent: 认知补丁生命周期
+# ---------------------------------------------------------------------------
+
+
+class AgentCognitionPatch(Base):
+    """认知补丁：支持 shadow/applied/rejected/rolled_back 生命周期。"""
+
+    __tablename__ = "agent_cognition_patches"
+    __table_args__ = (
+        Index("ix_agent_cognition_patches_target", "target_type", "target_name"),
+        Index("ix_agent_cognition_patches_status_created", "status", "created_at"),
+        CheckConstraint(
+            "status in ('shadow','applied','rejected','rolled_back')",
+            name="ck_agent_cognition_patches_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)  # tool / skill / peer
+    target_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    target_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    before_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    patch_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    evidence_event_ids: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="shadow", server_default="shadow")
+    validator_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+    applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

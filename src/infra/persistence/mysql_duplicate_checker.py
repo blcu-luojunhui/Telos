@@ -7,15 +7,18 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 
 from src.infra.database.mysql import (
+    ActivityRecordV2,
+    MeasurementItemV2,
+    NutritionItemV2,
+    NutritionRecordV2,
+    Record,
+    UserGoal,
     async_mysql_pool,
-    Meal,
-    Workout,
-    BodyMetric,
-    Goal,
 )
+from src.infra.persistence.mysql_user_identity import get_or_create_user_id
 from src.domain.interaction.duplicate_checker import DuplicateHit
 from src.domain.interaction.duplicate_checker.domain_record import DomainRecord
 from src.domain.interaction.schemas import IntentType
@@ -61,27 +64,30 @@ class DuplicatePolicy(ABC):
 
 
 class MealDuplicatePolicy(DuplicatePolicy):
-    table_name = "meals"
+    table_name = "records/nutrition_records"
 
     def build_query(self, dr: DomainRecord):
         meal_type = dr.primary_scope.get("meal_type")
         if not meal_type:
             return None
         return (
-            select(Meal)
+            select(Record.id, NutritionRecordV2.meal_type, NutritionRecordV2.estimated_calories, NutritionItemV2.food_name)
+            .join(NutritionRecordV2, NutritionRecordV2.record_id == Record.id)
+            .outerjoin(NutritionItemV2, NutritionItemV2.record_id == NutritionRecordV2.record_id)
             .where(
-                Meal.user_id == dr.user_id,
-                Meal.date == dr.date,
-                Meal.meal_type == meal_type,
-                Meal.status == "active",
+                Record.user_id == dr.user_id,
+                Record.record_type == "nutrition",
+                Record.local_date == dr.date,
+                Record.status == "active",
+                NutritionRecordV2.meal_type == meal_type,
             )
-            .order_by(Meal.id.desc())
+            .order_by(Record.id.desc())
             .limit(1)
         )
 
-    def extract_content(self, row: Meal) -> dict[str, Any]:
+    def extract_content(self, row: Any) -> dict[str, Any]:
         return {
-            "food_items": (row.food_items or "").strip().lower(),
+            "food_items": (row.food_name or "").strip().lower(),
             "estimated_calories": row.estimated_calories,
         }
 
@@ -96,34 +102,44 @@ class MealDuplicatePolicy(DuplicatePolicy):
             return False
         return True
 
-    def summary(self, row: Meal, existing_content: dict) -> str:
-        return f"已有{_meal_type_cn(row.meal_type)}记录：{row.food_items or '（无）'}"
+    def summary(self, row: Any, existing_content: dict) -> str:
+        return f"已有{_meal_type_cn(row.meal_type)}记录：{row.food_name or '（无）'}"
 
 
 class WorkoutDuplicatePolicy(DuplicatePolicy):
-    table_name = "workouts"
+    table_name = "records/activity_records"
 
     def build_query(self, dr: DomainRecord):
         w_type = dr.primary_scope.get("type")
         if not w_type:
             return None
         return (
-            select(Workout)
-            .where(
-                Workout.user_id == dr.user_id,
-                Workout.date == dr.date,
-                Workout.type == w_type,
-                Workout.status == "active",
+            select(
+                Record.id,
+                ActivityRecordV2.activity_type,
+                ActivityRecordV2.duration_min,
+                ActivityRecordV2.distance_km,
+                ActivityRecordV2.avg_pace_sec_per_km,
+                ActivityRecordV2.avg_hr,
+                ActivityRecordV2.calories,
             )
-            .order_by(Workout.id.desc())
+            .join(ActivityRecordV2, ActivityRecordV2.record_id == Record.id)
+            .where(
+                Record.user_id == dr.user_id,
+                Record.record_type == "activity",
+                Record.local_date == dr.date,
+                Record.status == "active",
+                ActivityRecordV2.activity_type == w_type,
+            )
+            .order_by(Record.id.desc())
             .limit(1)
         )
 
-    def extract_content(self, row: Workout) -> dict[str, Any]:
+    def extract_content(self, row: Any) -> dict[str, Any]:
         return {
             "duration_min": row.duration_min,
             "distance_km": row.distance_km,
-            "avg_pace": row.avg_pace,
+            "avg_pace": row.avg_pace_sec_per_km,
             "avg_hr": row.avg_hr,
             "calories": row.calories,
         }
@@ -136,8 +152,8 @@ class WorkoutDuplicatePolicy(DuplicatePolicy):
                 return False
         return True
 
-    def summary(self, row: Workout, existing_content: dict) -> str:
-        parts = [_workout_type_cn(row.type)]
+    def summary(self, row: Any, existing_content: dict) -> str:
+        parts = [_workout_type_cn(row.activity_type)]
         if row.duration_min:
             parts.append(f"{row.duration_min}分钟")
         if row.distance_km:
@@ -146,25 +162,39 @@ class WorkoutDuplicatePolicy(DuplicatePolicy):
 
 
 class BodyMetricDuplicatePolicy(DuplicatePolicy):
-    table_name = "body_metrics"
+    table_name = "records/measurement_records"
 
     def build_query(self, dr: DomainRecord):
         return (
-            select(BodyMetric)
-            .where(
-                BodyMetric.user_id == dr.user_id,
-                BodyMetric.date == dr.date,
-                BodyMetric.status == "active",
+            select(
+                Record.id,
+                func.max(
+                    case((MeasurementItemV2.metric_code == "weight", MeasurementItemV2.numeric_value))
+                ).label("weight"),
+                func.max(
+                    case((MeasurementItemV2.metric_code == "body_fat", MeasurementItemV2.numeric_value))
+                ).label("body_fat"),
+                func.max(
+                    case((MeasurementItemV2.metric_code == "sleep_hours", MeasurementItemV2.numeric_value))
+                ).label("sleep_hours"),
             )
-            .order_by(BodyMetric.id.desc())
+            .join(MeasurementItemV2, MeasurementItemV2.record_id == Record.id)
+            .where(
+                Record.user_id == dr.user_id,
+                Record.record_type == "measurement",
+                Record.local_date == dr.date,
+                Record.status == "active",
+            )
+            .group_by(Record.id)
+            .order_by(Record.id.desc())
             .limit(1)
         )
 
-    def extract_content(self, row: BodyMetric) -> dict[str, Any]:
+    def extract_content(self, row: Any) -> dict[str, Any]:
         return {
-            "weight": row.weight,
-            "body_fat": row.body_fat,
-            "sleep_hours": row.sleep_hours,
+            "weight": float(row.weight) if row.weight is not None else None,
+            "body_fat": float(row.body_fat) if row.body_fat is not None else None,
+            "sleep_hours": float(row.sleep_hours) if row.sleep_hours is not None else None,
         }
 
     def is_same(self, existing: dict, new: dict) -> bool:
@@ -175,7 +205,7 @@ class BodyMetricDuplicatePolicy(DuplicatePolicy):
                 return False
         return True
 
-    def summary(self, row: BodyMetric, existing_content: dict) -> str:
+    def summary(self, row: Any, existing_content: dict) -> str:
         parts = []
         if row.weight is not None:
             parts.append(f"体重{row.weight}kg")
@@ -187,31 +217,31 @@ class BodyMetricDuplicatePolicy(DuplicatePolicy):
 
 
 class GoalDuplicatePolicy(DuplicatePolicy):
-    table_name = "goals"
+    table_name = "user_goals"
 
     def build_query(self, dr: DomainRecord):
         g_type = dr.primary_scope.get("type")
         if not g_type:
             return None
         return (
-            select(Goal)
+            select(UserGoal)
             .where(
-                Goal.user_id == dr.user_id,
-                Goal.type == g_type,
-                Goal.status.in_(["planning", "ongoing"]),
+                UserGoal.user_id == dr.user_id,
+                UserGoal.goal_type == g_type,
+                UserGoal.status.in_(["draft", "active", "paused"]),
             )
-            .order_by(Goal.id.desc())
+            .order_by(UserGoal.id.desc())
             .limit(1)
         )
 
-    def extract_content(self, row: Goal) -> dict[str, Any]:
-        return dict(row.target or {})
+    def extract_content(self, row: Any) -> dict[str, Any]:
+        return dict(row.success_definition_json or {})
 
     def is_same(self, existing: dict, new: dict) -> bool:
         return False
 
-    def summary(self, row: Goal, existing_content: dict) -> str:
-        return f"已有进行中的{row.type}目标"
+    def summary(self, row: Any, existing_content: dict) -> str:
+        return f"已有进行中的{row.goal_type}目标"
 
 
 _POLICIES: dict[IntentType, DuplicatePolicy] = {
@@ -226,6 +256,7 @@ class MySQLDuplicateChecker:
     """实现 IDuplicateChecker：按意图选用策略，查库并比较内容。"""
 
     async def check(self, dr: DomainRecord) -> Optional[DuplicateHit]:
+        dr.user_id = await get_or_create_user_id(dr.user_id)
         policy = _POLICIES.get(dr.intent)
         if not policy:
             return None

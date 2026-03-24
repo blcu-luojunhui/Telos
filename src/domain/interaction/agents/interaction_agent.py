@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from src.domain.interaction.schemas import IntentType, ParsedRecord
 from src.domain.interaction.chat.response import ChatResponse
@@ -41,6 +41,34 @@ _QUERY_INTENTS = {
     IntentType.QUERY_SUMMARY,
 }
 
+_INTENT_PRIORITY = {
+    IntentType.DELETE_RECORD: 100,
+    IntentType.EDIT_LAST: 95,
+    IntentType.REQUEST_PLAN: 90,
+    IntentType.SET_GOAL: 85,
+    IntentType.RECORD_WORKOUT: 80,
+    IntentType.RECORD_MEAL: 80,
+    IntentType.RECORD_BODY_METRIC: 80,
+    IntentType.RECORD_STATUS: 80,
+    IntentType.QUERY_WORKOUT: 70,
+    IntentType.QUERY_MEAL: 70,
+    IntentType.QUERY_BODY_METRIC: 70,
+    IntentType.QUERY_SUMMARY: 70,
+    IntentType.UNKNOWN: 0,
+}
+
+
+def _pick_primary_intent(records: Sequence[ParsedRecord]) -> ParsedRecord:
+    """
+    统一主意图选择策略：
+    - 删除/编辑优先于记录和查询（避免“删计划id=2”被误当普通聊天）
+    - 目标与请求计划优先于一般记录
+    - UNKNOWN 最低
+    """
+    if not records:
+        raise ValueError("records must not be empty")
+    return max(records, key=lambda r: _INTENT_PRIORITY.get(r.intent, 1))
+
 
 async def run_interaction_agent(
     user_id: str,
@@ -48,6 +76,7 @@ async def run_interaction_agent(
     history: Optional[Sequence[dict]] = None,
     reference_date: Optional[date] = None,
     soul_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
 ) -> ChatResponse:
     """
     交互层唯一入口：接收用户消息，返回 NLP 理解结果。
@@ -68,10 +97,14 @@ async def run_interaction_agent(
     """
     ref = reference_date or date.today()
 
+    llm_metrics: dict[str, Any] = {}
+
     parsed_list = await parse_user_message(
         message=message,
         reference_date=ref,
         history=history,
+        trace_id=trace_id,
+        metrics=llm_metrics,
     )
 
     if not parsed_list:
@@ -84,14 +117,12 @@ async def run_interaction_agent(
             )
         ]
 
-    # 优先取记录类意图作为主意图，与 chat_service 行为一致
-    record_candidates = [p for p in parsed_list if p.intent in _RECORD_INTENTS]
-    primary = record_candidates[0] if record_candidates else parsed_list[0]
+    primary = _pick_primary_intent(parsed_list)
     primary.user_id = user_id
 
     has_request_plan = any(p.intent == IntentType.REQUEST_PLAN for p in parsed_list)
 
-    return await _route_intent(
+    resp = await _route_intent(
         parsed=primary,
         user_id=user_id,
         message=message,
@@ -99,7 +130,15 @@ async def run_interaction_agent(
         ref=ref,
         soul_id=soul_id,
         has_request_plan=has_request_plan,
+        trace_id=trace_id,
+        llm_metrics=llm_metrics,
     )
+    # 将 LLM 统计信息挂到 ChatResponse.extra.llm_metrics 上，供上层 API 返回
+    if llm_metrics:
+        if resp.extra is None:
+            resp.extra = {}
+        resp.extra.setdefault("llm_metrics", llm_metrics)
+    return resp
 
 
 async def _route_intent(
@@ -110,11 +149,20 @@ async def _route_intent(
     ref: date,
     soul_id: Optional[str],
     has_request_plan: bool = False,
+    trace_id: Optional[str] = None,
+    llm_metrics: Optional[dict[str, Any]] = None,
 ) -> ChatResponse:
     intent = parsed.intent
 
     if intent == IntentType.UNKNOWN:
-        return await _handle_unknown(user_id, message, history, soul_id)
+        return await _handle_unknown(
+            user_id,
+            message,
+            history,
+            soul_id,
+            trace_id=trace_id,
+            llm_metrics=llm_metrics,
+        )
 
     if intent in _RECORD_INTENTS:
         return _handle_record(parsed, user_id, has_request_plan)
@@ -131,7 +179,14 @@ async def _route_intent(
     if intent == IntentType.DELETE_RECORD:
         return _handle_delete(parsed, user_id)
 
-    return await _handle_unknown(user_id, message, history, soul_id)
+    return await _handle_unknown(
+        user_id,
+        message,
+        history,
+        soul_id,
+        trace_id=trace_id,
+        llm_metrics=llm_metrics,
+    )
 
 
 async def _handle_unknown(
@@ -139,12 +194,16 @@ async def _handle_unknown(
     message: str,
     history: Sequence[dict],
     soul_id: Optional[str],
+    trace_id: Optional[str] = None,
+    llm_metrics: Optional[dict[str, Any]] = None,
 ) -> ChatResponse:
     reply_text, sticker_id = await small_chat_reply(
         user_id=user_id,
         message=message,
         history=history,
         soul_id=soul_id,
+        trace_id=trace_id,
+        metrics=llm_metrics,
     )
     return ChatResponse(
         user_id=user_id,
@@ -188,19 +247,31 @@ def _handle_query(parsed: ParsedRecord, user_id: str) -> ChatResponse:
     return ChatResponse(
         user_id=user_id,
         type="query",
-        message=f"正在查询{intent_cn(parsed.intent)}…",
+        message=f"收到，我来帮你查一下{intent_cn(parsed.intent)}。我先整理一下数据，马上给你结果。",
         parsed=parsed_dict(parsed),
         extra={"query_intent": parsed.intent.value, "query_payload": parsed.payload},
     )
 
 
 def _handle_request_plan(parsed: ParsedRecord, user_id: str) -> ChatResponse:
+    text = (parsed.raw_message or "").strip().lower()
+    # “查看/展示/我的计划”走读库展示；“制定/生成/创建”走生成预览
+    view_keywords = ("展示", "查看", "看看", "显示", "我的计划", "当前计划", "plan")
+    build_keywords = ("制定", "生成", "新建", "创建", "安排")
+    mode = "view" if any(k in text for k in view_keywords) and not any(
+        k in text for k in build_keywords
+    ) else "build"
+    msg = (
+        "好的，我来读取你当前已保存的训练计划并展示给你。"
+        if mode == "view"
+        else "明白了，我来给你做一版可执行的训练计划。稍等一下，我会按你的目标和当前状态来安排。"
+    )
     return ChatResponse(
         user_id=user_id,
         type="plan_preview",
-        message="正在为你生成训练计划…",
+        message=msg,
         parsed=parsed_dict(parsed),
-        extra={"goal_id": (parsed.payload or {}).get("goal_id")},
+        extra={"goal_id": (parsed.payload or {}).get("goal_id"), "plan_mode": mode},
     )
 
 
@@ -208,7 +279,7 @@ def _handle_edit(parsed: ParsedRecord, user_id: str) -> ChatResponse:
     return ChatResponse(
         user_id=user_id,
         type="edit",
-        message="收到修改请求。",
+        message="好的，修改需求我收到了。我会按你这次的描述去更新对应记录。",
         parsed=parsed_dict(parsed),
         extra={
             "record_type": (parsed.payload or {}).get("record_type"),
@@ -221,7 +292,7 @@ def _handle_delete(parsed: ParsedRecord, user_id: str) -> ChatResponse:
     return ChatResponse(
         user_id=user_id,
         type="delete",
-        message="收到删除请求。",
+        message="明白，这条删除请求我记下了。接下来我会按你给的信息定位并删除对应记录。",
         parsed=parsed_dict(parsed),
         extra={
             "record_type": (parsed.payload or {}).get("record_type"),
