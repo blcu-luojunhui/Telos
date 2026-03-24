@@ -7,6 +7,7 @@ from datetime import date
 from quart import Blueprint, request, jsonify
 
 from src.core.audit import new_trace_id
+from src.core.routes.auth import jwt_required
 from src.domain.interaction import parse_user_message
 
 
@@ -14,6 +15,7 @@ def create_nlu_bp() -> Blueprint:
     nlu_bp = Blueprint("nlu", __name__, url_prefix="/v1/api")
 
     @nlu_bp.route("/nlu", methods=["POST"])
+    @jwt_required
     async def nlu():
         """
         Body: { "message": "...", "date": "2025-02-27"(可选) }

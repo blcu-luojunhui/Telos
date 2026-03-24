@@ -21,6 +21,7 @@ def create_chat_bp() -> Blueprint:
     chat_bp = Blueprint("chat", __name__, url_prefix="/v1/api")
 
     @chat_bp.route("/souls", methods=["GET"])
+    @jwt_required
     async def souls_list():
         """
         返回可选 Agent 人格列表（来自 souls 表），供前端展示为筛选按钮。

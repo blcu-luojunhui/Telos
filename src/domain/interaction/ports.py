@@ -27,7 +27,10 @@ class IRecordApplier(Protocol):
         落表并返回摘要。
         :param parsed: 解析结果
         :param replace_id: 若提供，则先对旧记录做软删再写入
-        :return: {"ok": bool, "intent": str, "table": str|None, "id": int|None, "error": str|None}
+        :return: {
+          "ok": bool, "intent": str, "entity": str|None, "table": str|None, "id": int|None, "error": str|None
+        }
+        注：entity 为 V2 标准字段，table 为兼容字段。
         """
         ...
 

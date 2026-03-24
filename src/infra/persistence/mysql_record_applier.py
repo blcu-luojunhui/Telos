@@ -10,35 +10,27 @@ from sqlalchemy import update
 
 from src.infra.database.mysql import (
     async_mysql_pool,
-    Workout,
-    Meal,
-    BodyMetric,
-    Goal,
+    Record,
 )
 from src.domain.interaction.record import apply_parsed_record
-from src.domain.interaction.schemas import IntentType, ParsedRecord
+from src.domain.interaction.schemas import ParsedRecord
 
 
 async def _soft_delete_existing(
-    intent: IntentType,
     record_id: int,
-    user_id: str,
+    user_id: str,  # user_code
 ) -> None:
-    """逻辑删除：将当前用户下该条旧记录 status 设为 'replaced'。"""
-    model_map = {
-        IntentType.RECORD_WORKOUT: Workout,
-        IntentType.RECORD_MEAL: Meal,
-        IntentType.RECORD_BODY_METRIC: BodyMetric,
-        IntentType.SET_GOAL: Goal,
-    }
-    model = model_map.get(intent)
-    if not model or not (user_id or "").strip():
+    """V2 逻辑覆盖：统一 records.status= 'superseded'。"""
+    from src.infra.persistence.mysql_user_identity import get_or_create_user_id
+
+    if not (user_id or "").strip():
         return
+    uid = await get_or_create_user_id(user_id)
     async with async_mysql_pool.session() as session:
         await session.execute(
-            update(model)
-            .where(model.id == record_id, model.user_id == user_id)
-            .values(status="replaced")
+            update(Record)
+            .where(Record.id == record_id, Record.user_id == uid, Record.status == "active")
+            .values(status="superseded", supersedes_record_id=None)
         )
         await session.commit()
 
@@ -52,5 +44,5 @@ class MySQLRecordApplier:
         replace_id: Optional[int] = None,
     ) -> dict[str, Any]:
         if replace_id is not None and (parsed.user_id or "").strip():
-            await _soft_delete_existing(parsed.intent, replace_id, parsed.user_id)
+            await _soft_delete_existing(replace_id, parsed.user_id)
         return await apply_parsed_record(parsed)

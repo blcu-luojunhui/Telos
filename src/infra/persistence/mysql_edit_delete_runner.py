@@ -10,58 +10,28 @@ from typing import Any, Optional
 from sqlalchemy import select, update
 
 from src.infra.database.mysql import (
+    ActivityRecordV2,
+    MeasurementItemV2,
+    NutritionItemV2,
+    NutritionRecordV2,
+    Record,
+    StatusRecordV2,
+    UserGoal,
+    Plan,
     async_mysql_pool,
-    Workout,
-    Meal,
-    BodyMetric,
-    Goal,
-    TrainingPlan,
 )
-async def _find_latest_workout(session, user_id: str) -> Optional[Any]:
+from src.infra.persistence.mysql_user_identity import get_or_create_user_id
+
+
+async def _find_latest_record(session, user_id: int, record_type: str) -> Optional[Any]:
     result = await session.execute(
-        select(Workout)
-        .where(Workout.user_id == user_id, Workout.status == "active")
-        .order_by(Workout.id.desc())
-        .limit(1)
-    )
-    return result.scalars().first()
-
-
-async def _find_latest_meal(session, user_id: str) -> Optional[Any]:
-    result = await session.execute(
-        select(Meal)
-        .where(Meal.user_id == user_id, Meal.status == "active")
-        .order_by(Meal.id.desc())
-        .limit(1)
-    )
-    return result.scalars().first()
-
-
-async def _find_latest_body_metric(session, user_id: str) -> Optional[Any]:
-    result = await session.execute(
-        select(BodyMetric)
-        .where(BodyMetric.user_id == user_id, BodyMetric.status == "active")
-        .order_by(BodyMetric.id.desc())
-        .limit(1)
-    )
-    return result.scalars().first()
-
-
-async def _find_latest_goal(session, user_id: str) -> Optional[Any]:
-    result = await session.execute(
-        select(Goal)
-        .where(Goal.user_id == user_id, Goal.status.in_(["planning", "ongoing"]))
-        .order_by(Goal.id.desc())
-        .limit(1)
-    )
-    return result.scalars().first()
-
-
-async def _find_latest_training_plan(session, user_id: str) -> Optional[Any]:
-    result = await session.execute(
-        select(TrainingPlan)
-        .where(TrainingPlan.user_id == user_id, TrainingPlan.status == "active")
-        .order_by(TrainingPlan.id.desc())
+        select(Record)
+        .where(
+            Record.user_id == user_id,
+            Record.record_type == record_type,
+            Record.status == "active",
+        )
+        .order_by(Record.id.desc())
         .limit(1)
     )
     return result.scalars().first()
@@ -79,56 +49,126 @@ class MySQLEditDeleteRunner:
     ) -> dict[str, Any]:
         if not (updates or {}):
             return {"ok": False, "id": None, "error": "未指定要修改的字段"}
+        uid = await get_or_create_user_id(user_id)
 
         async with async_mysql_pool.session() as session:
-            row = None
-            model = None
-            if record_type == "workout" or not record_type:
-                row = await _find_latest_workout(session, user_id)
-                model = Workout
-            if row is None and (record_type == "meal" or not record_type):
-                row = await _find_latest_meal(session, user_id)
-                model = Meal
-            if row is None and (record_type == "body_metric" or not record_type):
-                row = await _find_latest_body_metric(session, user_id)
-                model = BodyMetric
-            if row is None and record_type == "goal":
-                row = await _find_latest_goal(session, user_id)
-                model = Goal
-
-            if row is None or model is None:
-                return {"ok": False, "id": None, "error": "没有找到可修改的最近记录"}
-
-            # 只允许更新部分字段，避免误改
-            allowed = set()
-            if model == Workout:
+            rt = (record_type or "").strip().lower()
+            if rt in ("", "workout"):
+                row = await _find_latest_record(session, uid, "activity")
+                if not row:
+                    return {"ok": False, "id": None, "error": "没有找到可修改的最近记录"}
                 allowed = {
-                    "type", "duration_min", "distance_km", "avg_pace", "avg_hr",
-                    "calories", "subjective_fatigue", "sleep_quality", "mood",
-                    "motivation", "stress_level", "note",
+                    "type": "activity_type",
+                    "duration_min": "duration_min",
+                    "distance_km": "distance_km",
+                    "avg_pace": "avg_pace_sec_per_km",
+                    "avg_hr": "avg_hr",
+                    "calories": "calories",
+                    "subjective_fatigue": "subjective_fatigue",
+                    "sleep_quality": "sleep_quality",
+                    "mood": "mood",
+                    "motivation": "motivation",
+                    "stress_level": "stress_level",
+                    "note": "note",
                 }
-            elif model == Meal:
-                allowed = {
-                    "meal_type", "food_items", "estimated_calories",
-                    "protein_g", "carb_g", "fat_g", "satiety", "mood", "stress_level", "note",
-                }
-            elif model == BodyMetric:
-                allowed = {
-                    "weight", "body_fat", "muscle_mass", "resting_hr",
-                    "bp_systolic", "bp_diastolic", "sleep_hours", "note",
-                }
-            elif model == Goal:
-                allowed = {"type", "target", "deadline", "note"}
+                values = {allowed[k]: v for k, v in updates.items() if k in allowed}
+                if not values:
+                    return {"ok": False, "id": row.id, "error": "没有可应用的修改字段"}
+                await session.execute(
+                    update(ActivityRecordV2).where(ActivityRecordV2.record_id == row.id).values(**values)
+                )
+                await session.commit()
+                return {"ok": True, "id": row.id, "error": None}
 
-            values = {k: v for k, v in updates.items() if k in allowed}
-            if not values:
-                return {"ok": False, "id": row.id, "error": "没有可应用的修改字段"}
+            if rt == "meal":
+                row = await _find_latest_record(session, uid, "nutrition")
+                if not row:
+                    return {"ok": False, "id": None, "error": "没有找到可修改的最近记录"}
+                allowed = {
+                    "meal_type": "meal_type",
+                    "estimated_calories": "estimated_calories",
+                    "protein_g": "protein_g",
+                    "carb_g": "carb_g",
+                    "fat_g": "fat_g",
+                    "satiety": "satiety",
+                    "mood": "mood",
+                    "stress_level": "stress_level",
+                    "note": "note",
+                }
+                values = {allowed[k]: v for k, v in updates.items() if k in allowed}
+                has_food_items = "food_items" in updates and updates["food_items"] is not None
+                if not values and not has_food_items:
+                    return {"ok": False, "id": row.id, "error": "没有可应用的修改字段"}
+                if values:
+                    await session.execute(
+                        update(NutritionRecordV2).where(NutritionRecordV2.record_id == row.id).values(**values)
+                    )
+                if has_food_items:
+                    await session.execute(
+                        update(NutritionItemV2)
+                        .where(NutritionItemV2.record_id == row.id)
+                        .values(food_name=str(updates["food_items"])[:128])
+                    )
+                await session.commit()
+                return {"ok": True, "id": row.id, "error": None}
 
-            await session.execute(
-                update(model).where(model.id == row.id).values(**values)
-            )
-            await session.commit()
-            return {"ok": True, "id": row.id, "error": None}
+            if rt == "body_metric":
+                row = await _find_latest_record(session, uid, "measurement")
+                if not row:
+                    return {"ok": False, "id": None, "error": "没有找到可修改的最近记录"}
+                metric_fields = {
+                    "weight": "weight",
+                    "body_fat": "body_fat",
+                    "muscle_mass": "muscle_mass",
+                    "resting_hr": "resting_hr",
+                    "bp_systolic": "bp_systolic",
+                    "bp_diastolic": "bp_diastolic",
+                    "sleep_hours": "sleep_hours",
+                }
+                updated = False
+                for k, code in metric_fields.items():
+                    if k not in updates:
+                        continue
+                    updated = True
+                    await session.execute(
+                        update(MeasurementItemV2)
+                        .where(
+                            MeasurementItemV2.record_id == row.id,
+                            MeasurementItemV2.metric_code == code,
+                        )
+                        .values(numeric_value=updates[k])
+                    )
+                if not updated:
+                    return {"ok": False, "id": row.id, "error": "没有可应用的修改字段"}
+                await session.commit()
+                return {"ok": True, "id": row.id, "error": None}
+
+            if rt == "goal":
+                goal_q = await session.execute(
+                    select(UserGoal)
+                    .where(UserGoal.user_id == uid, UserGoal.status.in_(["draft", "active", "paused"]))
+                    .order_by(UserGoal.id.desc())
+                    .limit(1)
+                )
+                goal = goal_q.scalars().first()
+                if not goal:
+                    return {"ok": False, "id": None, "error": "没有找到可修改的最近记录"}
+                allowed = {
+                    "type": "goal_type",
+                    "title": "title",
+                    "target": "success_definition_json",
+                    "deadline": "target_date",
+                    "note": "note",
+                    "status": "status",
+                }
+                values = {allowed[k]: v for k, v in updates.items() if k in allowed}
+                if not values:
+                    return {"ok": False, "id": goal.id, "error": "没有可应用的修改字段"}
+                await session.execute(update(UserGoal).where(UserGoal.id == goal.id).values(**values))
+                await session.commit()
+                return {"ok": True, "id": goal.id, "error": None}
+
+            return {"ok": False, "id": None, "error": f"未知记录类型: {record_type}"}
 
     async def delete_record(
         self,
@@ -141,80 +181,105 @@ class MySQLEditDeleteRunner:
     ) -> dict[str, Any]:
         if not record_type:
             return {"ok": False, "id": None, "error": "请指定要删除的记录类型"}
+        uid = await get_or_create_user_id(user_id)
 
-        model_map = {
-            "workout": Workout,
-            "meal": Meal,
-            "body_metric": BodyMetric,
-            "goal": Goal,
-            "training_plan": TrainingPlan,
-            "plan": TrainingPlan,
-        }
-        model = model_map.get(record_type.lower())
-        if not model:
-            return {"ok": False, "id": None, "error": f"未知记录类型: {record_type}"}
-
+        rt = record_type.lower()
         async with async_mysql_pool.session() as session:
-            if record_id is not None:
-                result = await session.execute(
-                    select(model).where(
-                        model.id == record_id,
-                        model.user_id == user_id,
+            if rt in ("workout", "meal", "body_metric"):
+                record_type_map = {
+                    "workout": "activity",
+                    "meal": "nutrition",
+                    "body_metric": "measurement",
+                }
+                db_type = record_type_map[rt]
+                if record_id is not None:
+                    result = await session.execute(
+                        select(Record).where(
+                            Record.id == record_id,
+                            Record.user_id == uid,
+                            Record.record_type == db_type,
+                        )
                     )
-                )
-                row = result.scalars().first()
-            elif record_type == "meal" and date_arg and meal_type:
-                result = await session.execute(
-                    select(Meal)
-                    .where(
-                        Meal.user_id == user_id,
-                        Meal.date == date_arg,
-                        Meal.meal_type == meal_type,
-                        Meal.status == "active",
+                    row = result.scalars().first()
+                elif rt == "meal" and date_arg and meal_type:
+                    result = await session.execute(
+                        select(Record)
+                        .join(NutritionRecordV2, NutritionRecordV2.record_id == Record.id)
+                        .where(
+                            Record.user_id == uid,
+                            Record.record_type == "nutrition",
+                            Record.local_date == date_arg,
+                            NutritionRecordV2.meal_type == meal_type,
+                            Record.status == "active",
+                        )
+                        .order_by(Record.id.desc())
+                        .limit(1)
                     )
-                    .order_by(Meal.id.desc())
-                    .limit(1)
-                )
-                row = result.scalars().first()
-            elif record_type == "workout" and date_arg and workout_type:
-                result = await session.execute(
-                    select(Workout)
-                    .where(
-                        Workout.user_id == user_id,
-                        Workout.date == date_arg,
-                        Workout.type == workout_type,
-                        Workout.status == "active",
+                    row = result.scalars().first()
+                elif rt == "workout" and date_arg and workout_type:
+                    result = await session.execute(
+                        select(Record)
+                        .join(ActivityRecordV2, ActivityRecordV2.record_id == Record.id)
+                        .where(
+                            Record.user_id == uid,
+                            Record.record_type == "activity",
+                            Record.local_date == date_arg,
+                            ActivityRecordV2.activity_type == workout_type,
+                            Record.status == "active",
+                        )
+                        .order_by(Record.id.desc())
+                        .limit(1)
                     )
-                    .order_by(Workout.id.desc())
-                    .limit(1)
-                )
-                row = result.scalars().first()
-            else:
-                # 删除该类型下最新一条
-                if model == Workout:
-                    row = await _find_latest_workout(session, user_id)
-                elif model == Meal:
-                    row = await _find_latest_meal(session, user_id)
-                elif model == BodyMetric:
-                    row = await _find_latest_body_metric(session, user_id)
-                elif model == Goal:
-                    row = await _find_latest_goal(session, user_id)
-                elif model == TrainingPlan:
-                    row = await _find_latest_training_plan(session, user_id)
+                    row = result.scalars().first()
                 else:
-                    row = None
+                    row = await _find_latest_record(session, uid, db_type)
 
-            if not row:
-                return {"ok": False, "id": None, "error": "没有找到要删除的记录"}
+                if not row:
+                    return {"ok": False, "id": None, "error": "没有找到要删除的记录"}
+                await session.execute(
+                    update(Record).where(Record.id == row.id).values(status="deleted")
+                )
+                await session.commit()
+                return {"ok": True, "id": row.id, "error": None}
 
-            if model == Goal:
-                status_value = "abandoned"
-            elif model == TrainingPlan:
-                status_value = "archived"
-            else:
-                status_value = "deleted"
-            await session.execute(
-                update(model).where(model.id == row.id).values(status=status_value)
-            )
-            await session.commit()
-            return {"ok": True, "id": row.id, "error": None}
+            if rt == "goal":
+                if record_id is not None:
+                    result = await session.execute(
+                        select(UserGoal).where(UserGoal.id == record_id, UserGoal.user_id == uid)
+                    )
+                    row = result.scalars().first()
+                else:
+                    result = await session.execute(
+                        select(UserGoal)
+                        .where(UserGoal.user_id == uid, UserGoal.status.in_(["draft", "active", "paused"]))
+                        .order_by(UserGoal.id.desc())
+                        .limit(1)
+                    )
+                    row = result.scalars().first()
+                if not row:
+                    return {"ok": False, "id": None, "error": "没有找到要删除的记录"}
+                await session.execute(update(UserGoal).where(UserGoal.id == row.id).values(status="abandoned"))
+                await session.commit()
+                return {"ok": True, "id": row.id, "error": None}
+
+            if rt in ("training_plan", "plan"):
+                if record_id is not None:
+                    result = await session.execute(
+                        select(Plan).where(Plan.id == record_id, Plan.user_id == uid)
+                    )
+                    row = result.scalars().first()
+                else:
+                    result = await session.execute(
+                        select(Plan)
+                        .where(Plan.user_id == uid, Plan.status == "active")
+                        .order_by(Plan.id.desc())
+                        .limit(1)
+                    )
+                    row = result.scalars().first()
+                if not row:
+                    return {"ok": False, "id": None, "error": "没有找到要删除的记录"}
+                await session.execute(update(Plan).where(Plan.id == row.id).values(status="archived"))
+                await session.commit()
+                return {"ok": True, "id": row.id, "error": None}
+
+            return {"ok": False, "id": None, "error": f"未知记录类型: {record_type}"}

@@ -18,9 +18,10 @@ from src.infra.database.mysql import (
     async_mysql_pool,
     Conversation,
     ChatMessage,
-    PendingConfirmation,
+    PendingAction,
     Soul,
 )
+from src.infra.persistence.mysql_user_identity import get_or_create_user_id
 from src.domain.interaction.duplicate_checker import DuplicateHit
 from src.domain.interaction.schemas import IntentType, ParsedRecord
 
@@ -31,7 +32,7 @@ SESSION_TIMEOUT_MINUTES = 30
 
 
 class PendingConfirm:
-    """等待用户确认的操作，序列化存入 pending_confirmations 表。"""
+    """等待用户确认的操作，序列化存入 pending_actions 表。"""
 
     def __init__(self, parsed: ParsedRecord, duplicate: DuplicateHit):
         self.parsed = parsed
@@ -155,50 +156,84 @@ class MySQLUserSession:
             for r in reversed(rows)
         ]
 
-    def _pending_filter(self):
-        if self.conversation_id is not None:
-            return (
-                PendingConfirmation.user_id == self.user_id,
-                PendingConfirmation.conversation_id == self.conversation_id,
-            )
-        return (
-            PendingConfirmation.user_id == self.user_id,
-            PendingConfirmation.conversation_id.is_(None),
-        )
-
     async def set_pending(self, pending: PendingConfirm) -> None:
+        uid = await get_or_create_user_id(self.user_id)
+        pending_type_map = {
+            "_slot_fill": "slot_fill",
+            "_plan_confirm": "confirm_plan",
+            "_confirm_delete": "confirm_delete",
+            "_confirm_save": "confirm_save",
+        }
+        pending_type = pending_type_map.get(pending.duplicate.table, "confirm_save")
         async with async_mysql_pool.session() as session:
-            cond1, cond2 = self._pending_filter()
-            await session.execute(delete(PendingConfirmation).where(cond1, cond2))
+            cond = [
+                PendingAction.user_id == uid,
+                PendingAction.pending_type.in_(
+                    ["confirm_save", "confirm_delete", "slot_fill", "confirm_plan"]
+                ),
+            ]
+            if self.conversation_id is not None:
+                cond.append(PendingAction.conversation_id == self.conversation_id)
+            else:
+                cond.append(PendingAction.conversation_id.is_(None))
+            await session.execute(delete(PendingAction).where(*cond))
             snap = pending.to_dict()
-            rec = PendingConfirmation(
-                user_id=self.user_id,
+            rec = PendingAction(
+                user_id=uid,
                 conversation_id=self.conversation_id,
-                parsed_snapshot=snap["parsed"],
-                duplicate_snapshot=snap["duplicate"],
+                pending_type=pending_type,
+                snapshot_json=snap,
             )
             session.add(rec)
             await session.commit()
 
     async def get_pending(self) -> Optional[PendingConfirm]:
+        uid = await get_or_create_user_id(self.user_id)
         async with async_mysql_pool.session() as session:
-            cond1, cond2 = self._pending_filter()
-            stmt = select(PendingConfirmation).where(cond1, cond2)
+            cond = [
+                PendingAction.user_id == uid,
+                PendingAction.pending_type.in_(
+                    ["confirm_save", "confirm_delete", "slot_fill", "confirm_plan"]
+                ),
+            ]
+            if self.conversation_id is not None:
+                cond.append(PendingAction.conversation_id == self.conversation_id)
+            else:
+                cond.append(PendingAction.conversation_id.is_(None))
+            stmt = select(PendingAction).where(*cond).order_by(desc(PendingAction.id)).limit(1)
             result = await session.execute(stmt)
             row = result.scalars().first()
         if not row:
             return None
         try:
-            return PendingConfirm.from_dict(
-                {"parsed": row.parsed_snapshot, "duplicate": row.duplicate_snapshot}
-            )
+            snap = row.snapshot_json or {}
+            if not isinstance(snap, dict):
+                return None
+            if "parsed" in snap and "duplicate" in snap:
+                return PendingConfirm.from_dict(snap)
+            # 兼容极端脏数据
+            if "parsed_snapshot" in snap and "duplicate_snapshot" in snap:
+                return PendingConfirm.from_dict(
+                    {"parsed": snap["parsed_snapshot"], "duplicate": snap["duplicate_snapshot"]}
+                )
+            return None
         except Exception:
             return None
 
     async def clear_pending(self) -> None:
+        uid = await get_or_create_user_id(self.user_id)
         async with async_mysql_pool.session() as session:
-            cond1, cond2 = self._pending_filter()
-            await session.execute(delete(PendingConfirmation).where(cond1, cond2))
+            cond = [
+                PendingAction.user_id == uid,
+                PendingAction.pending_type.in_(
+                    ["confirm_save", "confirm_delete", "slot_fill", "confirm_plan"]
+                ),
+            ]
+            if self.conversation_id is not None:
+                cond.append(PendingAction.conversation_id == self.conversation_id)
+            else:
+                cond.append(PendingAction.conversation_id.is_(None))
+            await session.execute(delete(PendingAction).where(*cond))
             await session.commit()
 
     async def has_pending(self) -> bool:
@@ -264,9 +299,9 @@ class MySQLSessionStore:
                     .values(status="archived")
                 )
                 await session.execute(
-                    delete(PendingConfirmation).where(
-                        PendingConfirmation.user_id == user_id,
-                        PendingConfirmation.conversation_id == latest.id,
+                    delete(PendingAction).where(
+                        PendingAction.user_id == await get_or_create_user_id(user_id),
+                        PendingAction.conversation_id == latest.id,
                     )
                 )
                 logger.info(

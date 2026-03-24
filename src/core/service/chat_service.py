@@ -77,6 +77,26 @@ def _is_add_new(msg: str) -> bool:
     return "再记一条" in t or ("保留" in t and "新增" in t) or "不覆盖" in t and "新" in t
 
 
+def _table_to_entity(table: str | None) -> str | None:
+    """兼容旧 table 字段，同时补充 V2 entity 字段。"""
+    m = {
+        "records/activity_records": "record.activity",
+        "records/nutrition_records": "record.nutrition",
+        "records/measurement_records": "record.measurement",
+        "records/status_records": "record.status",
+        "user_goals": "goal",
+        "plans": "plan",
+        "_slot_fill": "pending.slot_fill",
+        "_plan_confirm": "pending.confirm_plan",
+        "_confirm_delete": "pending.confirm_delete",
+        "_confirm_save": "pending.confirm_save",
+        "records": "record",
+    }
+    if not table:
+        return None
+    return m.get(table, table.replace("/", "."))
+
+
 # ---------------------------------------------------------------------------
 # 应用服务
 # ---------------------------------------------------------------------------
@@ -393,7 +413,12 @@ class ChatApplicationService:
                 return ChatResponse(
                     user_id=user_id, type="duplicate_same", message=reply,
                     conversation_id=conv_id, parsed=parsed_dict(parsed),
-                    conflict={"existing_id": dup.existing_id, "table": dup.table, "summary": dup.summary},
+                    conflict={
+                        "existing_id": dup.existing_id,
+                        "entity": _table_to_entity(dup.table),
+                        "table": dup.table,  # legacy compatibility
+                        "summary": dup.summary,
+                    },
                     trace_id=trace_id,
                 )
             pending = PendingConfirm(parsed=parsed, duplicate=dup)
@@ -411,7 +436,12 @@ class ChatApplicationService:
             return ChatResponse(
                 user_id=user_id, type="needs_confirm", message=reply,
                 conversation_id=conv_id, parsed=parsed_dict(parsed),
-                conflict={"existing_id": dup.existing_id, "table": dup.table, "summary": dup.summary},
+                conflict={
+                    "existing_id": dup.existing_id,
+                    "entity": _table_to_entity(dup.table),
+                    "table": dup.table,  # legacy compatibility
+                    "summary": dup.summary,
+                },
                 trace_id=trace_id,
             )
 
@@ -534,7 +564,8 @@ class ChatApplicationService:
                     conversation_id=conversation_id, parsed=parsed_dict(pending.parsed),
                     conflict={
                         "existing_id": pending.duplicate.existing_id,
-                        "table": pending.duplicate.table,
+                        "entity": _table_to_entity(pending.duplicate.table),
+                        "table": pending.duplicate.table,  # legacy compatibility
                         "summary": pending.duplicate.summary,
                     },
                     trace_id=tid,
@@ -888,22 +919,24 @@ class ChatApplicationService:
         ref: date,
     ) -> tuple[str, dict]:
         from sqlalchemy import select
-        from src.infra.database.mysql import async_mysql_pool, Goal
+        from src.infra.database.mysql import async_mysql_pool, UserGoal
         from src.domain.interaction.record.training_plan import build_plan_preview
+        from src.infra.persistence.mysql_user_identity import get_or_create_user_id
 
         goal_id = payload.get("goal_id") if isinstance(payload.get("goal_id"), int) else None
         goal = None
+        uid = await get_or_create_user_id(user_id)
         async with async_mysql_pool.session() as session:
             if goal_id:
                 r = await session.execute(
-                    select(Goal).where(Goal.id == goal_id, Goal.user_id == user_id)
+                    select(UserGoal).where(UserGoal.id == goal_id, UserGoal.user_id == uid)
                 )
                 goal = r.scalars().first()
             if not goal:
                 r = await session.execute(
-                    select(Goal)
-                    .where(Goal.user_id == user_id, Goal.status.in_(["planning", "ongoing"]))
-                    .order_by(Goal.id.desc())
+                    select(UserGoal)
+                    .where(UserGoal.user_id == uid, UserGoal.status.in_(["draft", "active", "paused"]))
+                    .order_by(UserGoal.id.desc())
                     .limit(1)
                 )
                 goal = r.scalars().first()
@@ -919,23 +952,35 @@ class ChatApplicationService:
 
     async def _reply_existing_plan(self, user_id: str) -> tuple[str, dict]:
         from sqlalchemy import select, desc
-        from src.infra.database.mysql import async_mysql_pool, TrainingPlan
+        from src.infra.database.mysql import async_mysql_pool, Plan, PlanVersion
+        from src.infra.persistence.mysql_user_identity import get_or_create_user_id
+
+        uid = await get_or_create_user_id(user_id)
 
         async with async_mysql_pool.session() as session:
             row = await session.execute(
-                select(TrainingPlan)
-                .where(TrainingPlan.user_id == user_id, TrainingPlan.status == "active")
-                .order_by(desc(TrainingPlan.updated_at), desc(TrainingPlan.id))
+                select(Plan)
+                .where(Plan.user_id == uid, Plan.status == "active", Plan.plan_type == "training")
+                .order_by(desc(Plan.updated_at), desc(Plan.id))
                 .limit(1)
             )
             plan = row.scalars().first()
+            pv = None
+            if plan:
+                pv_row = await session.execute(
+                    select(PlanVersion)
+                    .where(PlanVersion.plan_id == plan.id)
+                    .order_by(desc(PlanVersion.version_no), desc(PlanVersion.id))
+                    .limit(1)
+                )
+                pv = pv_row.scalars().first()
 
         if not plan:
             return "你还没有已保存的训练计划。可以先说「帮我制定计划」。", {
                 "plan_requires_confirm": False
             }
 
-        payload = plan.plan if isinstance(plan.plan, dict) else {}
+        payload = pv.payload_json if (pv and isinstance(pv.payload_json, dict)) else {}
         if not payload:
             return "找到一条训练计划，但内容为空。你可以说「帮我制定计划」重新生成。", {
                 "plan_requires_confirm": False

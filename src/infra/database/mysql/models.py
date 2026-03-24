@@ -1,12 +1,15 @@
 """
-ORM models (mappers) for better_me MySQL data layer.
-Tables: workouts, body_metrics, meals, user_profile, goals, conversations, chat_messages, pending_confirmations.
+LEGACY MODELS (V1) - Do not use for new development.
 
-使用方式：先 async_mysql_pool.init(app) 或 init(dsn=...)，再通过 async_mysql_pool.session() 取 Session，例如：
-    from src.infra.database.mysql import async_mysql_pool, Workout
-    from sqlalchemy import select
-    async with async_mysql_pool.session() as session:
-        result = await session.execute(select(Workout).where(Workout.date >= ...))
+该文件仅用于历史迁移与数据回溯参考。
+运行期默认模型入口已切换到：
+- models_runtime.py （认证/会话/消息）
+- models_v2.py      （用户/事实记录/目标/计划/pending_actions）
+
+注意：
+1) 新代码不要从本文件导入业务模型。
+2) create_all 运行链路不应再依赖本文件，以避免 V1 旧表被重新建回。
+3) 在完成 V2 全量切换与数据校验后，可配合 SQL 脚本删除 V1 表。
 """
 
 from datetime import date, datetime, time

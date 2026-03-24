@@ -6,6 +6,7 @@ from datetime import date
 
 from quart import Blueprint, request, jsonify
 
+from src.core.routes.auth import jwt_required
 from src.domain.interaction.schemas import IntentType, ParsedRecord
 from src.domain.interaction import apply_parsed_record
 
@@ -14,6 +15,7 @@ def create_record_bp() -> Blueprint:
     record_bp = Blueprint("record", __name__, url_prefix="/v1/api")
 
     @record_bp.route("/record", methods=["POST"])
+    @jwt_required
     async def record():
         """
         Body: {
@@ -24,7 +26,10 @@ def create_record_bp() -> Blueprint:
         """
         data = await request.get_json() or {}
 
+        token_user = getattr(request, "user", None)
         user_id = (data.get("user_id") or "").strip()
+        if token_user:
+            user_id = str(token_user).strip()
         if not user_id:
             return jsonify({"error": "user_id is required"}), 400
 
