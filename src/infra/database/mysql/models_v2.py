@@ -114,6 +114,7 @@ class UserPreference(Base):
     training_preferences_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     communication_preferences_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     constraints_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    reminder_preferences_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -154,15 +155,13 @@ class Record(Base):
         BigInteger,
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
-    record_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    record_type: Mapped[str] = mapped_column(String(32), nullable=False)
     source_type: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
         default="chat",
         server_default="chat",
-        index=True,
     )
     source_ref_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     conversation_id: Mapped[Optional[int]] = mapped_column(
@@ -175,8 +174,8 @@ class Record(Base):
         ForeignKey("chat_messages.id", ondelete="SET NULL"),
         nullable=True,
     )
-    occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
-    local_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    local_date: Mapped[date] = mapped_column(Date, nullable=False)
     timezone: Mapped[str] = mapped_column(
         String(64),
         nullable=False,
@@ -224,7 +223,7 @@ class ActivityRecordV2(Base):
         ForeignKey("records.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    activity_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    activity_type: Mapped[str] = mapped_column(String(32), nullable=False)
     subtype: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     duration_min: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     distance_km: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -254,7 +253,7 @@ class NutritionRecordV2(Base):
         ForeignKey("records.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    meal_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    meal_type: Mapped[str] = mapped_column(String(32), nullable=False)
     estimated_calories: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     protein_g: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     carb_g: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -279,7 +278,6 @@ class NutritionItemV2(Base):
         BigInteger,
         ForeignKey("nutrition_records.record_id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     food_name: Mapped[str] = mapped_column(String(128), nullable=False)
     quantity_text: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)

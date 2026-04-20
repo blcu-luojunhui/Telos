@@ -2,16 +2,20 @@
 小聊天链：当 NLU 未识别到结构化记录意图时，生成自然语言回复。
 
 使用 LangChain Agent + Tools 替代原有的 ReActAgent。
-支持微信搜索工具调用、人格注入。
+支持微信搜索工具调用、人格注入、用户记忆。
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Optional, Sequence
 
 from langchain_core.tools import StructuredTool
 
 from src.domain.interaction.chat.stickers import parse_sticker_from_reply
+from src.domain.interaction.chat.response_calibrator import calibrate_response
+from src.domain.interaction.chat.user_memory import load_user_memory, format_memory_for_prompt
+from src.domain.interaction.chat.memory_updater import maybe_update_user_memory
 from ..callbacks import InteractionCallbackHandler
 from ..llm import get_chat_model
 from ..prompts.chat import build_chat_prompt
@@ -19,14 +23,14 @@ from ..prompts.chat import build_chat_prompt
 
 def _format_history(history: Sequence[dict]) -> str:
     lines: list[str] = []
-    for turn in history[-10:]:
+    for turn in history[-15:]:
         role = str(turn.get("role") or "").strip()
         content = str(turn.get("content") or "").strip()
         if not content or role not in {"user", "assistant"}:
             continue
         prefix = "用户" if role == "user" else "助手"
-        if len(content) > 120:
-            content = content[:120] + "…"
+        if len(content) > 200:
+            content = content[:200] + "…"
         lines.append(f"{prefix}：{content}")
     return "\n".join(lines) if lines else "（暂无历史）"
 
@@ -67,7 +71,21 @@ async def small_chat_reply(
     :return: (回复正文, sticker_id 或 None)
     """
     history_block = _format_history(history)
-    chat_prompt = await build_chat_prompt(soul_id)
+
+    # 加载用户记忆画像
+    try:
+        user_memory = await load_user_memory(user_id)
+        user_profile_block = format_memory_for_prompt(user_memory)
+    except Exception:
+        user_memory = None
+        user_profile_block = ""
+
+    config = calibrate_response(message, history, user_memory)
+    chat_prompt = await build_chat_prompt(
+        soul_id,
+        user_profile_block=user_profile_block,
+        response_hint=config.response_hint,
+    )
 
     chain_input = {
         "user_id": user_id,
@@ -83,7 +101,7 @@ async def small_chat_reply(
         try:
             from langchain.agents import AgentExecutor, create_tool_calling_agent
 
-            llm = get_chat_model(temperature=0.55, max_tokens=380)
+            llm = get_chat_model(temperature=config.temperature, max_tokens=config.max_tokens)
             tools = [weixin_tool]
 
             agent = create_tool_calling_agent(llm, tools, chat_prompt)
@@ -102,7 +120,7 @@ async def small_chat_reply(
             raw = None
 
     if not raw:
-        llm = get_chat_model(temperature=0.55, max_tokens=380)
+        llm = get_chat_model(temperature=config.temperature, max_tokens=config.max_tokens)
         result = await (chat_prompt | llm).ainvoke(
             chain_input, config={"callbacks": [cb]}
         )
@@ -115,4 +133,14 @@ async def small_chat_reply(
 
     reply_text, sticker_id = parse_sticker_from_reply(raw)
     reply_text = reply_text or raw
+
+    # 异步更新用户记忆（fire-and-forget）
+    # 存储任务引用防止被垃圾回收
+    try:
+        task = asyncio.create_task(maybe_update_user_memory(user_id, message, list(history)))
+        # 添加错误处理回调，避免未捕获的异常
+        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+    except Exception:
+        pass
+
     return (reply_text.strip(), sticker_id)

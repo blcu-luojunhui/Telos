@@ -32,10 +32,16 @@ def create_app() -> Quart:
         _app.chat_service = create_chat_application_service()
         logger.info("Registering routes")
         register_routes(_app)
-        logger.info("MySQL ready")
+        logger.info("Initializing scheduler")
+        from src.jobs.scheduler import init_scheduler
+        init_scheduler()
+        logger.info("MySQL ready, scheduler started")
 
     @_app.after_serving
     async def shutdown():
+        logger.info("Shutting down scheduler")
+        from src.jobs.scheduler import shutdown_scheduler
+        shutdown_scheduler()
         logger.info("Closing MySQL connection pool")
         await async_mysql_pool.close()
         logger.info("Shutdown complete")

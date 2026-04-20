@@ -73,7 +73,9 @@ class InteractionCallbackHandler(AsyncCallbackHandler):
     ) -> None:
         self.llm_calls += 1
         self._llm_start_times[run_id] = time.monotonic()
-        model = serialized.get("kwargs", {}).get("model_name", "unknown")
+        model = "unknown"
+        if serialized:
+            model = serialized.get("kwargs", {}).get("model_name", "unknown")
         logger.debug(
             "[%s] LLM start #%d | model=%s | prompts=%d",
             self.trace_id, self.llm_calls, model, len(prompts),
@@ -130,10 +132,12 @@ class InteractionCallbackHandler(AsyncCallbackHandler):
         **kwargs: Any,
     ) -> None:
         self.chain_depth += 1
-        id_field = serialized.get("id", ["unknown"])
-        chain_name = serialized.get("name") or (
-            id_field[-1] if isinstance(id_field, list) else str(id_field)
-        )
+        chain_name = "unknown"
+        if serialized:
+            id_field = serialized.get("id", ["unknown"])
+            chain_name = serialized.get("name") or (
+                id_field[-1] if isinstance(id_field, list) else str(id_field)
+            )
         logger.debug("[%s] Chain start: %s (depth=%d)", self.trace_id, chain_name, self.chain_depth)
 
     async def on_chain_end(
@@ -166,7 +170,9 @@ class InteractionCallbackHandler(AsyncCallbackHandler):
         **kwargs: Any,
     ) -> None:
         self.tool_calls += 1
-        tool_name = serialized.get("name", "unknown")
+        tool_name = "unknown"
+        if serialized:
+            tool_name = serialized.get("name", "unknown")
         logger.debug("[%s] Tool start: %s (#%d)", self.trace_id, tool_name, self.tool_calls)
 
     async def on_tool_end(
