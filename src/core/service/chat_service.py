@@ -58,7 +58,7 @@ def _is_confirm(msg: str) -> bool:
     t = msg.strip().lower()
     if t in ("确认", "是", "是的", "对", "好", "好的", "替换", "覆盖", "yes", "y", "ok", "1"):
         return True
-    if "覆盖" in t or "替换" in t or "确认" in t or "那就" in t and ("好" in t or "吧" in t):
+    if "覆盖" in t or "替换" in t or "确认" in t or ("那就" in t and ("好" in t or "吧" in t)):
         return True
     return False
 
@@ -74,7 +74,7 @@ def _is_cancel(msg: str) -> bool:
 
 def _is_add_new(msg: str) -> bool:
     t = msg.strip()
-    return "再记一条" in t or ("保留" in t and "新增" in t) or "不覆盖" in t and "新" in t
+    return "再记一条" in t or ("保留" in t and "新增" in t) or ("不覆盖" in t and "新" in t)
 
 
 def _table_to_entity(table: str | None) -> str | None:
