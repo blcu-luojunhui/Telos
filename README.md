@@ -12,7 +12,7 @@
 
 <br>
 
-<img src="docs/images/telos-hero.png" alt="Telos" width="600"/>
+<img src="assets/telos-hero.png" alt="Telos" width="600"/>
 
 </div>
 
@@ -72,7 +72,7 @@ Telos 理解的"生命"，不是单一维度的功能分类，而是一个从经
 
 <div align="center">
 
-<img src="docs/images/stage.png" alt="五层生命框架" width="600"/>
+<img src="assets/stage.png" alt="五层生命框架" width="600"/>
 
 <br>
 
@@ -93,6 +93,12 @@ Telos 理解的"生命"，不是单一维度的功能分类，而是一个从经
 ## 为什么只为自己而做
 
 > *"我"本身就是最复杂、最长期、也最值得被理解的对象。*
+
+<br>
+
+每天，我们的习惯、喜好、需求、社交，都在被大数据悄悄记住。算法比我们自己更知道我们会点开什么、买下什么、沉迷什么——但它记住这些，是为了收割。
+
+我们也记录，但目的完全不同——**不为商业，不为算法，只为认识自己。**
 
 <br>
 
