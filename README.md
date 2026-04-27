@@ -12,6 +12,10 @@
 
 <br>
 
+[English](docs/README_EN.md) · [开发文档](docs/DEVELOPMENT.md)
+
+<br>
+
 <img src="assets/telos-hero.png" alt="Telos" width="600"/>
 
 </div>
@@ -41,14 +45,6 @@
 它不是效率工具，不是健康记录器，不是时间管理软件。
 
 它是一个**长期系统**——记录我的生命，理解我的状态，承接我对世界的观察与感悟，沉淀我的认知，帮助我在这个世界中，慢慢建立属于自己的秩序。
-
-<br>
-
----
-
-## 这不是一个效率工具
-
-Telos 不追求让你"做更多事"。
 
 <br>
 
@@ -108,32 +104,26 @@ Telos 理解的"生命"，不是单一维度的功能分类，而是一个从经
 
 <br>
 
-Telos 的价值不在单次使用，而在长期积累。数据越完整，它越能理解我的节律、模式与成长轨迹。它不是一次性交付的工具，而是一个长期共生的系统。
-
-而我自己，就是最直接的验证场——我能第一时间感受到，这个系统是否真的懂我。
-
-<br>
-
 ---
 
 <br>
 
 <div align="center">
 
-**Telos** — *Become who you are meant to be.*
+**协作者**
+
+<a href="https://claude.ai/code"><img src="https://img.shields.io/badge/Claude_Code-F97316?style=flat-square&logo=anthropic&logoColor=white" alt="Claude Code"/></a>
+<a href="https://cursor.com"><img src="https://img.shields.io/badge/Cursor-000000?style=flat-square&logo=cursor&logoColor=white" alt="Cursor"/></a>
+<a href="https://chatgpt.com"><img src="https://img.shields.io/badge/ChatGPT-10A37F?style=flat-square&logo=openai&logoColor=white" alt="ChatGPT"/></a>
 
 <br>
+<br>
+
+**Telos** — *Become who you are meant to be.*
+
 <br>
 
 *MIT License*  
 *这个项目是为我自己而做，但如果对你有启发，欢迎参考和借鉴。*
-
-<br>
-
-**协作者**
-
-<a href="https://claude.ai/code"><img src="https://img.shields.io/badge/Claude_Code-F97316?style=for-the-badge&logo=anthropic&logoColor=white" alt="Claude Code"/></a>
-<a href="https://cursor.com"><img src="https://img.shields.io/badge/Cursor-000000?style=for-the-badge&logo=cursor&logoColor=white" alt="Cursor"/></a>
-<a href="https://chatgpt.com"><img src="https://img.shields.io/badge/ChatGPT-10A37F?style=for-the-badge&logo=openai&logoColor=white" alt="ChatGPT"/></a>
 
 </div>
